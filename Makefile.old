@@ -111,8 +111,10 @@ HTMLLIBPODS    =
 HTMLSCRIPTPODS = 
 MAN1PODS = 
 MAN3PODS = RemoteFileSelect.pm \
+	SearchDialog.pm \
 	Shell.pm \
-	Workspace.pm
+	Workspace.pm \
+	XFontSelect.pm
 HTMLEXT = html
 INST_MAN1DIR = blib/man1
 INSTALLMAN1DIR = $(PREFIX)/man/man1
@@ -155,15 +157,21 @@ EXPORT_LIST =
 PERL_ARCHIVE = 
 
 TO_INST_PM = RemoteFileSelect.pm \
+	SearchDialog.pm \
 	Shell.pm \
-	Workspace.pm
+	Workspace.pm \
+	XFontSelect.pm
 
-PM_TO_BLIB = Shell.pm \
+PM_TO_BLIB = XFontSelect.pm \
+	$(INST_LIBDIR)/XFontSelect.pm \
+	Shell.pm \
 	$(INST_LIBDIR)/Shell.pm \
 	RemoteFileSelect.pm \
 	$(INST_LIBDIR)/RemoteFileSelect.pm \
 	Workspace.pm \
-	$(INST_LIBDIR)/Workspace.pm
+	$(INST_LIBDIR)/Workspace.pm \
+	SearchDialog.pm \
+	$(INST_LIBDIR)/SearchDialog.pm
 
 
 # --- MakeMaker tool_autosplit section:
@@ -391,16 +399,22 @@ POD2MAN = $(PERL) -we '%m=@ARGV;for (keys %m){' \
 -e 'system(qq[$$^X ].q["-I$(PERL_ARCHLIB)" "-I$(PERL_LIB)" $(POD2MAN_EXE) ].qq[$$_>$$m{$$_}])==0 or warn "Couldn\047t install $$m{$$_}\n";' \
 -e 'chmod(oct($(PERM_RW))), $$m{$$_} or warn "chmod $(PERM_RW) $$m{$$_}: $$!\n";}'
 
-manifypods : pure_all Shell.pm \
+manifypods : pure_all XFontSelect.pm \
+	Shell.pm \
 	RemoteFileSelect.pm \
-	Workspace.pm
+	Workspace.pm \
+	SearchDialog.pm
 	@$(POD2MAN) \
+	XFontSelect.pm \
+	$(INST_MAN3DIR)/Tk::XFontSelect.$(MAN3EXT) \
 	Shell.pm \
 	$(INST_MAN3DIR)/Tk::Shell.$(MAN3EXT) \
 	RemoteFileSelect.pm \
 	$(INST_MAN3DIR)/Tk::RemoteFileSelect.$(MAN3EXT) \
 	Workspace.pm \
-	$(INST_MAN3DIR)/Tk::Workspace.$(MAN3EXT)
+	$(INST_MAN3DIR)/Tk::Workspace.$(MAN3EXT) \
+	SearchDialog.pm \
+	$(INST_MAN3DIR)/Tk::SearchDialog.$(MAN3EXT)
 
 # --- MakeMaker processPL section:
 
@@ -427,7 +441,7 @@ clean ::
 # Delete temporary files (via clean) and also delete installed files
 realclean purge ::  clean
 	rm -rf $(INST_AUTODIR) $(INST_ARCHAUTODIR)
-	rm -f $(INST_LIBDIR)/Shell.pm $(INST_LIBDIR)/RemoteFileSelect.pm $(INST_LIBDIR)/Workspace.pm
+	rm -f $(INST_LIBDIR)/XFontSelect.pm $(INST_LIBDIR)/Shell.pm $(INST_LIBDIR)/RemoteFileSelect.pm $(INST_LIBDIR)/Workspace.pm $(INST_LIBDIR)/SearchDialog.pm
 	rm -rf Makefile Makefile.old
 
 

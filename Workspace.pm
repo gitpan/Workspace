@@ -1,5 +1,5 @@
 package Tk::Workspace;
-my $RCSRevKey = '$Revision: 1.53 $';
+my $RCSRevKey = '$Revision: 1.58 $';
 $RCSRevKey =~ /Revision: (.*?) /;
 $VERSION=$1;
 
@@ -15,6 +15,8 @@ use Tk::DialogBox;
 use Tk::Dialog;
 use Tk::RemoteFileSelect;
 use Tk::ColorEditor;
+use Tk::XFontSelect;
+use Tk::SearchDialog;
 
 use Tk::Shell qw( VERSION ishell shell_client shell_cmd );
 
@@ -142,7 +144,8 @@ sub new {
 	outputfile => undef,
 	filter => undef,
         text => [],
-	cmdargs => ()
+	cmdargs => (),
+	searchopts => ()  # Flattened hash returned from SearchDialog widget.
 	};
     bless($self, $class);
     my $i;
@@ -222,7 +225,7 @@ my @bool_args = ('-help', '-write', '-quit', '-dump' );
 
 sub commandline {
   my ($self) = @_;
-  my ($need_parm, $i, $prev_arg, $arg, $parameter, @workargs, $nargs );
+  my ($need_parm, $i, $prev_arg, $arg, @workargs, $nargs );
   $nargs = @{$self -> {cmdargs}};
   for( $i =  $nargs; $i >= 0; $i-- ) { 
     push @workargs, (${$self -> {cmdargs}}[$i]);
@@ -240,17 +243,15 @@ sub commandline {
       $need_parm = 0;
       $prev_arg = $i;
       # argument that is a boolean
-#      print "configure $i => 1 \n"; 
       $i =~ s/\-//;
       $self -> $i('1');
     } elsif( $need_parm == 1 ) {
       # parameter for argument.
-#      print "configure $prev_arg => $i \n"; 
       $need_parm = 0;
       $prev_arg =~ s/\-//;
       $self -> $prev_arg($i);
     } else {
-      die "Parameter error: $i, $prev_arg\n";
+      die "Parameter error: $prev_arg, $i.\n";
     }
   }
 }
@@ -282,11 +283,16 @@ sub bind {
 				    sub{$self -> write_to_disk('1')});
     ($self -> window) -> SUPER::bind('<Alt-u>', 
 				    sub{$self -> ws_undo});
+    ($self -> window) -> SUPER::bind('<Alt-f>', 
+				    sub{$self -> ws_search});
+    ($self -> window) -> SUPER::bind('<Alt-g>', 
+				    sub{$self -> ws_search_again});
+    ($self -> window) -> SUPER::bind('<Alt-j>', 
+				    sub{$self -> goto_line});
     # unbind the right mouse button.
     ($self -> window) -> SUPER::bind('Tk::TextUndo', '<3>', '');
-
     $self -> {window} -> SUPER::bind( '<ButtonPress-3>', 
-			       [\&postpopupmenu, $self, Ev('x'), Ev('y') ] );
+			       [\&postpopupmenu, $self, Ev('X'), Ev('Y') ] );
 }
 
 sub WrapMenuItems
@@ -433,24 +439,27 @@ sub menus {
 				 -font => $menufont,
 				 -command => sub{$self -> ws_paste});
     $self -> {editmenu} -> add ('separator');
+    ($self -> {editmenu}) -> add( 'command', -label => 'Search & Replace...', 
+				  -accelerator => 'Alt-F',
+				 -state => 'normal',
+				 -font => $menufont,
+		 -command => sub{$self -> ws_search} );
+    ($self -> {editmenu}) -> add( 'command', -label => 'Repeat Last Search',
+				 -accelerator => 'Alt-G',
+				 -state => 'normal',
+				 -font => $menufont,
+				 -command => sub{$self -> ws_search_again});
     $self -> {editmenu} -> add ( 'command', -label => 'Evaluate Selection',
 				 -state => 'normal',
 				 -command => sub{$self -> evalselection()});
-    $self -> {editmenu} -> add ('separator');
-    my $items = ($self -> {text}) -> SUPER::SearchMenuItems();
-    ($self -> {editmenu}) -> AddItems ( @$items );
     ($self -> { editmenu }) -> configure( -font => $menufont );
+
     $self -> {editmenu} -> add ('separator');
     $self -> {editmenu} -> add ( 'command', -label => 'Goto Line...',
 				 -state => 'normal',
 				 -font => $menufont,
-		 -command => sub{&goto_line($self -> {text})});
-
-    $self -> {editmenu} -> add ( 'command', -label => 'Which Line?',
-				 -state => 'normal',
-				 -font => $menufont,
-	 -command => sub{&what_line($self -> {text})});
-
+				 -accelerator => 'Alt-J',
+		 -command => sub{$self->goto_line});
     ($self -> { optionsmenu }) -> configure( -font => $menufont );
     $self -> {optionsmenu} -> add ( 'cascade',
 				    -label => 'Word Wrap',
@@ -734,7 +743,7 @@ sub wmgeometry {
 
 sub geometry {
     my ($self, $g, $i) = @_;
-    my $nargs = scalar @_;
+     my $nargs = scalar @_;
     if( $nargs == 3 ) {
       $g =~ m/([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)/;
       $self -> width($1); $self -> height($2); $self -> x($3); 
@@ -744,8 +753,10 @@ sub geometry {
       $self -> text -> markSet( 'insert', $self -> insertionpoint );
       $self -> text -> see( 'insert' );
     } elsif ( $nargs == 1 ) {
-      my $cg = $self -> width.'x'.$self -> height.'+'.$self -> x.'+'.
-        $self -> y;
+       my $cg = $self -> window -> geometry;
+      $cg =~ m/([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)/;
+      $self -> width($1); $self -> height($2); $self -> x($3); 
+      $self -> y($4);
       my $ip = $self -> text -> index( 'insert' );
       return ($cg, $ip);
     } else {
@@ -758,66 +769,32 @@ sub postpopupmenu {
     my $self = shift;
     my $x = shift;
     my $y = shift;
-    my $g = ($self -> window) -> geometry;
-    $g =~ m/([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)/;
-    $self -> width($1); $self -> height($2); $self -> x($3); 
-    $self -> y($4);
-    ($self -> popupmenu) -> post( $self -> x + $x, $self -> y + $y );
+#    my $g = ($self -> window) -> geometry;
+#    $g =~ m/([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)/;
+#    $self -> width($1); $self -> height($2); $self -> x($3); 
+#    $self -> y($4);
+    ($self -> popupmenu) -> post( $x, $y );
 }
 
-#
-# These two subroutines are adapted from Text.pm of Perl/Tk 800.022
-#
-sub what_line
-{
- my ($w)=@_;
- my ($line,$col) = split(/\./,$w->index('insert'));
- $w->messageBox(-type => 'Ok', -title => "What Line Number",
-                -message => "The cursor is on line $line (column is $col)");
+sub goto_line {
+  my $self = shift;
+  my $d = $self -> window -> DialogBox( -title => 'Goto Line',
+					-buttons => [qw/Ok Cancel/],
+				      -default_button => 'Ok' );
+  my $l = $d -> add( 'Label', -text => 'Line Number: ',
+		     -font => $menufont ) 
+    -> pack( -side => 'left', -padx => 5, -pady => 5 );
+		     
+  my $e = $d -> add( 'Entry', -width => 10 ) 
+    -> pack( -side => 'left', -padx => 5, -pady => 5 );
+  my ($row, $col) = split /\./, $self -> text -> index('insert');
+  $e -> insert( '1.0', $row );
+  if( ( $resp = $d -> Show ) =~ /Ok/ ) {
+    $self -> text -> markSet( 'insert', $e -> get.'.0' );
+    $self -> text -> see( 'insert' );
+  }
+  
 }
-
-sub goto_line
-{
- my ($w)=@_;
- my $popup = $w->{'GOTO_LINE_NUMBER_POPUP'};
-
- unless (defined($w->{'LAST_GOTO_LINE'}))
-  {
-   my ($line,$col) =  split(/\./, $w->index('insert'));
-   $w->{'LAST_GOTO_LINE'} = $line;
-  }
-
- ## if anything is selected when bring up the pop-up, put it in entry window.	
- my $selected;
- eval { $selected = $w->SelectionGet(-selection => "PRIMARY"); };
- unless ($@)
-  {
-   if (defined($selected) and length($selected))
-    {
-     unless ($selected =~ /\D/)
-      {
-       $w->{'LAST_GOTO_LINE'} = $selected;
-      }
-    }
-  }
- unless (defined($popup))
-  {
-   require Tk::DialogBox;
-   $popup = $w->DialogBox(-buttons => [qw[Ok Cancel]],-title => "Goto Line Number", -popover => $w,
-                          -command => sub { $w->GotoLineNumber($w->{'LAST_GOTO_LINE'}) if $_[0] eq 'Ok'});
-   $w->{'GOTO_LINE_NUMBER_POPUP'}=$popup;
-   $popup->resizable('no','no');
-   my $frame = $popup->Frame->pack(-fill => 'x');
-   $frame->Label(text=>'Enter line number: ')->pack(-side => 'left');
-   my $entry = $frame->Entry(-background=>'white',width=>25,
-                             -textvariable => \$w->{'LAST_GOTO_LINE'})->pack(-side =>'left',-fill => 'x');
-   $popup->Advertise(entry => $entry);
-  }
- $popup->Popup;
- $popup->Subwidget('entry')->focus;
- $popup->Wait;
-}
-
 
 sub scrollbar {
   my $self = shift;
@@ -859,62 +836,9 @@ sub set_scroll {
 
 sub ws_font {
     my ($self) = @_;
-    my @systemfonts;
-    my $dialog;
-    my $listframe;
-    my $buttonframe;
-    my $acceptbutton;
-    my $applybutton;
-    my $cancelbutton;
-    my $f;
-
-    $dialog = ($self -> window) -> 
-	    Toplevel( -title => 'Select Font' );
-    $listframe = $dialog -> Frame( -container => 'no');
-    $buttonframe = $dialog -> Frame( -container => 'no');
-    $listframe -> pack;
-    $buttonframe -> pack;
-    open FONTLIST, 'xlsfonts|' or printf STDERR 
-	"Could not get system fonts using xlsfonts.\n";
-    while ( <FONTLIST> ) {
-	@systemfonts = map {split /^/m; } <FONTLIST>; 
-    }
-    close FONTLIST;
-    $list = $listframe -> 
-	Scrolled( 'Listbox', -height => 20, -width => 55,
-		 -selectmode => 'single',
-		 -scrollbars => 'se' );
-    foreach $f ( @systemfonts ) { $list -> insert( 'end', $f ); }
-    $list -> pack( -anchor => 'w', -fill => 'x' );
-    $acceptbutton = $buttonframe 
-	-> Button( -text => 'Accept',
-		   -command => [\&fontdialogaccept, $dialog, $list, $self]) 
-	    -> pack( -side => 'left' );
-    $applybutton = $buttonframe 
-	-> Button( -text => 'Apply',
-		   -command => [\&fontdialogapply, $dialog, $list, $self]) 
-	    -> pack( -side => 'left' );
-    $cancelbutton = $buttonframe 
-	-> Button( -text => 'Cancel',
-		   -command => [\&fontdialogclose, $dialog]) 
-	    -> pack( -side => 'left');
-}
-
-sub fontdialogaccept {
-    my ($d, $list, $self) = @_;
-    &fontdialogapply( $d, $list, $self );
-    &fontdialogclose( $d );
-}
-
-sub fontdialogapply {
-    my ($d, $list, $self) = @_;
-    my $f;
-    my $newheight;
-    my $newwidth;
-    my $oldgeometry;
-    my $x;
-    my $y;
-    $f = $list -> get( $list -> curselection );
+    my ($oldgeometry, $dialog, $f, $x, $y, $newwidth, $newheight);
+    $dialog = ($self -> {window}) -> XFontSelect;
+    my $f = $dialog -> Show;
     ($self -> text) -> configure( -font => $f );
     $self -> textfont( $f );
     $oldgeometry = ($self -> window) -> geometry();
@@ -922,14 +846,10 @@ sub fontdialogapply {
     $x = $1; $y = $2;
     $newwidth = ($self -> text) -> reqwidth;
     $newheight = ($self -> text) -> reqheight;
-    ($self -> window) -> geometry($newwidth . 'x' . $newheight .
+    $self -> geometry($newwidth . 'x' . $newheight .
 				  '+' . $x . '+' . $y, 
 				  $self -> insertionpoint );
-}
-
-sub fontdialogclose {
-    my ($d) = @_;
-    $d -> DESTROY;
+    return;
 }
 
 sub elementColor {
@@ -1081,11 +1001,10 @@ sub write_to_disk {
     }
     $self -> watchcursor;
     open FILE, ">>" . $tmppath;
-    $contents = ($self -> text) -> get( '1.0', end );
+    $contents = ($self -> text) -> get( '1.0', 'end' );
     printf FILE '#!/usr/bin/perl' . "\n";
 
-    ($geometry, $ip) = $self -> geometry;
-#    $geometry= ($self -> window) -> geometry;
+    $geometry= ($self -> window) -> geometry;
     $geometry =~ m/([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)/;
     $width = $1; $height = $2; $x = $3; $y = $4;
 
@@ -1118,12 +1037,16 @@ sub write_to_disk {
     grep { s/scrollbars\=\'.*\'/scrollbars=\'$sb\'/ } @tmpobject;
     grep { s/insert\=\'.*\'/insert=\'$ip\'/ } @tmpobject;
     grep { s/#!\/usr\/bin\/perl// } @tmpobject;
-	   grep { s/my \$text=\'\'\;// } @tmpobject;
-	   foreach $line ( @tmpobject ) { printf FILE $line . "\n"; };
-	   close FILE;
-	   my @remove_old = ( 'mv', $tmppath, $workspacepath );
-	   system( @remove_old );
-	   chmod 0755, $workspacepath;
+    grep { s/my \$text=\'\'\;// } @tmpobject;
+    foreach $line ( @tmpobject ) { printf FILE $line . "\n"; };
+    close FILE;
+    my @remove_old = ( 'mv', $tmppath, $workspacepath );
+    system( @remove_old );
+    my $mask = umask;
+   chmod (0666 &~ $mask) , $workspacepath;
+#   This should set the correct executable bits for the mask, at
+#   least bash DTRT.
+    system( 'chmod', '+x', $workspacepath );
     $self -> defaultcursor;
 EXIT:	   if ( $quit ) { $self -> window -> WmDeleteWindow; }
 	
@@ -1457,8 +1380,7 @@ sub self_help {
 
 # return the pathname to the Workspace.pm module.
 sub libname {
-  my $i;
-  my $val;
+  my ($i, $val);
   foreach $i ( keys( %:: ) ) {
     $val = $::{$i};
     if ( $val =~ /Workspace\.pm/ ) {
@@ -1495,6 +1417,115 @@ sub defaultcursor {
   $app -> window -> Unbusy( -recurse => '1' );
 }
 
+sub ws_search_again {
+  my $self = shift;
+  my ($t, @oplist, %opts, $opkey, $opval, $i, $firstmatch, $newinsert,
+     $matchlength, @tkopts, $newcol, $row, $col );
+  push @oplist, @{$self -> {searchopts}};
+  for($i=0;$i<=@oplist;$i+=2){$opts{$oplist[$i]}=$oplist[$i+1]}
+  return if $opts{'-searchstring'} eq '';
+  my $s = $opts{'-searchstring'};
+  ($opts{'-optioncase'} ne '1') ? push @tkopts, ('-nocase') : '' ;
+  ($opts{'-optionregex'} eq '1') ? push @tkopts, ('-regex') : ' ';
+  ($opts{'-optionbackward'} eq '1') ? push @tkopts, ('-backwards') : 
+     push @tkopts, ('-forward');
+  $t = $self -> text;
+  $newinsert = $t -> index('insert');
+  ($row, $col) = split /\./, $newinsert;
+  $matchlength = length($s);
+  $newcol =  $col+$matchlength;
+  $col += 1;
+  $newinsert="$row\.$col";
+  if(($opts{'-replacestring'} ne '' ) && ( $opts{-optionregex} ne '1')){
+    local $r = $opts{'-replacestring'};
+    $newinsert = $t -> index('insert');
+    ($row, $col) = split /\./, $newinsert;
+    $col += 1;
+    $newinsert="$row\.$col";
+    $firstmatch = $t -> search( @tkopts,$s,$newinsert);
+    if( $firstmatch ne '' ) {
+      ($row, $col) = split /\./, $firstmatch;
+      $t -> markSet( 'insert', $firstmatch );
+      $t -> see( 'insert' );
+      $matchlength = length($s);
+      $newcol =  $col+$matchlength;
+      for( $i = $col; $i < $newcol; $i++ ) {
+	$t -> tagAdd( 'sel', "$row\.$i" );
+      }
+      $t -> delete( $firstmatch, "$row\.$i" );
+      $t -> insert( $t -> index('insert'), $r );
+      $newcol=$col+length($r);
+      for( $i = $col; $i < $newcol; $i++ ) {
+	$t -> tagAdd( 'sel', "$row\.$i" );
+      }
+    }
+  } else {
+    $t->tagRemove('sel',$t->index('insert'), "$row\.$newcol");
+    $firstmatch = $t -> search( @tkopts,$s,$newinsert);
+    if( $firstmatch ne '' ) {
+      ($row, $col) = split /\./, $firstmatch;
+      $t -> markSet( 'insert', $firstmatch );
+      $t -> see( 'insert' );
+      $newcol =  $col+$matchlength;
+      for( $i = $col; $i < $newcol; $i++ ) {
+	$t -> tagAdd( 'sel', "$row\.$i" );
+      }
+    }
+  }
+}
+
+sub ws_search {
+  my $self = shift;
+  my ($t, @oplist, %opts, $opkey, $opval, $i, $firstmatch, $nextmatch,
+     $matchlength, @tkopts, );
+  $t = $self -> text;
+  push @oplist, @{$self -> {searchopts}};
+  my $d = $self -> window -> SearchDialog( @oplist );
+  @oplist = $d -> Show;
+  for($i=0;$i<=@oplist;$i+=2){$opts{$oplist[$i]}=$oplist[$i+1]}
+  return if $opts{'-searchstring'} eq '';
+  $t -> tagRemove( 'sel', '1.0', 'end' );
+  push @{$self -> {searchopts}}, @oplist;
+  my $s = $opts{'-searchstring'};
+  ($opts{'-optioncase'} ne '1') ? push @tkopts, ('-nocase') : '' ;
+  ($opts{'-optionregex'} eq '1') ? push @tkopts, ('-regex') : ' ';
+  ($opts{'-optionbackward'} eq '1') ? push @tkopts, ('-backwards') : 
+     push @tkopts, ('-forward');
+  if(($opts{'-replacestring'} ne '' ) && ( $opts{-optionregex} ne '1')){
+    local $r = $opts{'-replacestring'};
+    $firstmatch = $t -> search( @tkopts,$s,$t->index('insert'));
+    if( $firstmatch ne '' ) {
+      local ($row, $col) = split /\./, $firstmatch;
+      local $newcol;
+      $t -> markSet( 'insert', $firstmatch );
+      $t -> see( 'insert' );
+      $matchlength = length($s);
+      $newcol =  $col+$matchlength;
+      for( $i = $col; $i < $newcol; $i++ ) {
+	$t -> tagAdd( 'sel', "$row\.$i" );
+      }
+      $t -> delete( $firstmatch, "$row\.$i" );
+      $t -> insert( $t -> index('insert'), $r );
+      $newcol=$col+length($r);
+      for( $i = $col; $i < $newcol; $i++ ) {
+	$t -> tagAdd( 'sel', "$row\.$i" );
+      }
+    }
+  } else {
+    $firstmatch = $t -> search( @tkopts,$s,$t->index('insert'));
+    if( $firstmatch ne '' ) {
+      local ($row, $col) = split /\./, $firstmatch;
+      local $newcol;
+      $t -> markSet( 'insert', $firstmatch );
+      $t -> see( 'insert' );
+      $matchlength = length($s);
+      $newcol =  $col+$matchlength;
+      for( $i = $col; $i < $newcol; $i++ ) {
+	$t -> tagAdd( 'sel', "$row\.$i" );
+      }
+    }
+  }
+}
 
 1;
 __END__
@@ -1759,15 +1790,13 @@ Paste -- Insert text from the X clipboard at the insertion point.
 
 Evaluate Selection -- Interpret the selected text as Perl code.
 
-Find -- Search for specified text, and specify search options.  Marks
-text for later replacement (see below).
-
-Find Next -- Find next match of search text.
-
-Previous -- Find previous match of search text.
-
-Replace -- Replace marked search text with text from the replacement
-entry.
+Search & Replace -- Open a dialog box to enter search and/or replace
+strings.  Users can select options for exact upper/lower case
+matching, regular expression searches, forward or backward searches,
+and no query on replace.  If "Replace without Asking" is selected,
+then all search matches will be replaced.  The default is to prompt
+before the replacement.  Replacements for regular expression matches
+are not supported.
 
 Goto Line -- Go to the line entered by the user.
 
@@ -1819,6 +1848,7 @@ and Tk::bind man pages.
     Alt-X                 Copy Selection to Clipboard and Delete
     Alt-C                 Copy Selection to Clipboard
     Alt-V                 Insert Clipboard Contents at Cursor
+    Alt-F                 Search & Replace
     
     Right, Ctrl-F         Forward Character
     Left, Ctrl-B          Backward Character
@@ -1922,7 +1952,7 @@ Perl by Larry Wall and many others.
 
 =head1 REVISION 
 
-$Id: Workspace.pm,v 1.53 2000/11/25 20:08:52 kiesling Exp kiesling $
+$Id: Workspace.pm,v 1.58 2000/12/03 01:04:49 kiesling Exp kiesling $
 
 =head1 SEE ALSO:
 

@@ -1,4 +1,4 @@
-Tk::Workspace.pm, Version 1.53, installation:
+Tk::Workspace.pm, Version 1.58, installation:
 
 The Tk::Workspace.pm distribution has been tested only on the Linux
 and Solaris operating systems.  Refer all questions and problem
@@ -15,17 +15,17 @@ System Requirements:
 
 Installation:
 
-1.  Untar the workspace-1.53 archive with the guzip and tar commands:
+1.  Untar the workspace-1.58 archive with the guzip and tar commands:
 
-  # gzip -dc Workspace-1.53.tar.gz | tar xvf -
+  # gzip -dc Workspace-1.58.tar.gz | tar xvf -
  
    or, using GNU tar,
 
-  # tar zxvf Workspace-1.53.tar.gz
+  # tar zxvf Workspace-1.58.tar.gz
 
 2.  Change to the top-level subdirectory:
 
-  # cd workspace-1.53
+  # cd workspace-1.58
 
 3.  The top-level Makefile should work on any Unix or derivative
     system that has GNU make installed.  It uses the Perl ExtUtils 

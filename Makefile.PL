@@ -4,6 +4,13 @@ use ExtUtils::MakeMaker;
 # is written.
 
 WriteMakefile( PREREQ_PM => { "Tk"  => '800.022' },
+	       NAME => 'Tk::XFontSelect',
+	       VERSION_FROM => 'XFontSelect.pm',
+	       "dist"  => { COMPRESS  => "gzip -9f",
+			    SUFFIZ    => ".gz"  } 
+	       );
+	      
+WriteMakefile( PREREQ_PM => { "Tk"  => '800.022' },
 	       NAME => 'Tk::RemoteFileSelect',
 	       VERSION_FROM => 'RemoteFileSelect.pm',
 	       "dist"  => { COMPRESS  => "gzip -9f",
@@ -13,6 +20,12 @@ WriteMakefile( PREREQ_PM => { "Tk"  => '800.022' },
 WriteMakefile( PREREQ_PM => { "Tk"  => '800.022' },
 	       NAME => 'Tk::Shell',
 	       VERSION_FROM => 'Shell.pm',
+	       "dist"  => { COMPRESS  => "gzip -9f",
+			    SUFFIZ    => ".gz"  } 
+	       );
+WriteMakefile( PREREQ_PM => { "Tk"  => '800.022' },
+	       NAME => 'Tk::SearchDialog',
+	       VERSION_FROM => 'SearchDialog.pm',
 	       "dist"  => { COMPRESS  => "gzip -9f",
 			    SUFFIZ    => ".gz"  } 
 	       );
