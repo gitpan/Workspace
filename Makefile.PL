@@ -4,6 +4,13 @@ use ExtUtils::MakeMaker;
 # is written.
 
 WriteMakefile( PREREQ_PM => { "Tk"  => '800.022' },
+	       NAME => 'Tk::RemoteFileSelect',
+	       VERSION_FROM => 'RemoteFileSelect.pm',
+	       "dist"  => { COMPRESS  => "gzip -9f",
+			    SUFFIZ    => ".gz"  } 
+	       );
+	      
+WriteMakefile( PREREQ_PM => { "Tk"  => '800.022' },
 	       NAME => 'Tk::Shell',
 	       VERSION_FROM => 'Shell.pm',
 	       "dist"  => { COMPRESS  => "gzip -9f",

@@ -1,5 +1,5 @@
 package Tk::Workspace;
-my $RCSRevKey = '$Revision: 1.50 $';
+my $RCSRevKey = '$Revision: 1.53 $';
 $RCSRevKey =~ /Revision: (.*?) /;
 $VERSION=$1;
 
@@ -13,8 +13,7 @@ use Tk::TextUndo;
 use Tk::Entry;
 use Tk::DialogBox;
 use Tk::Dialog;
-use Tk::FileSelect;
-use Tk::CmdLine;
+use Tk::RemoteFileSelect;
 use Tk::ColorEditor;
 
 use Tk::Shell qw( VERSION ishell shell_client shell_cmd );
@@ -25,9 +24,7 @@ use IPC::Open3;
 use IPC::Open2;
 use IO::Select;
 
-@ISA=qw(Tk::TextUndo Exporter);
-use base qw(Tk::Widget Tk::Text Tk::TextUndo);
-Construct Tk::Widget 'Tk::Workspace';
+@ISA=qw(Tk::Widget Exporter);
 
 $SIG{WINCH} = \&do_win_signal_event;
 sub do_win_signal_event {
@@ -41,6 +38,36 @@ if( ( $ptk_major_ver lt '800' ) || ( $ptk_minor_ver lt '022' ) ) {
      die "Fatal Error: \nThis version of Workspace.pm Requires Perl/Tk 800.022.";
 }
 
+my $cmdhelptext = <<'end-of-cmd-help';
+
+Usage: workspace [options]
+
+ Options: 
+   -background | -bg <color>        Menu and dialog background color.
+   -textbackground <color>          Background color of text.
+   -foreground | -fg <color>        Menu and dialog text color.
+   -textforeground <color>          Foreground color of text.
+   -font | -fn <Xfontdesc>          X11 font for menus and dialogs.
+   -importfile <filename>           Read <filename> into workspace at 
+                                    startup.
+   -exportfile <filename>           Write workspace text to <filename>.
+   -dump                            Display text on console.
+   -class <Classname>               Resource class name. 
+   -xrm <pattern>                   Load X resources containing <pattern>.
+   -display | -screen <displayname> Name of X display.
+   -title <workspacename>           Name of workspace.
+   -help                            Display this message.
+   -iconic                          Iconify window on startup.
+   -motif                           Use Motif look-and-feel.
+   -synchronous                     Synchronous communication with X
+                                    server. For debugging.
+   -write                           Write workspace to disk.
+   -quit                            Exit without saving workspace.   
+ 
+Options can begin with either one (`-'), or two (`--') dashes.
+
+end-of-cmd-help
+
 my @Workspaceobject = 
     ('#!/usr/bin/perl',
      'my $text=\'\';',
@@ -53,10 +80,9 @@ my @Workspaceobject =
      'my $scrollbars=\'\';',
      'my $insert=\'1.0\';',
      'my $font=\'*-courier-medium-r-*-*-12-*"\';',
-     'use Tk::Workspace;', 
-     '@ISA = qw(Tk::Workspace);',
-     'use strict;',
      'use Tk;',
+     'use Tk::Workspace;', 
+     'use strict;',
      'use FileHandle;',
      'use Env qw(HOME);',
      'my $workspace = Tk::Workspace -> new ( menubarvisible => $menuvisible, ',
@@ -66,26 +92,26 @@ my @Workspaceobject =
      '$workspace -> text -> insert ( \'end\', $text );',
      '$workspace -> text -> configure( -foreground => $fg, -background => $bg, -font => $font, -insertbackground => $fg );',
      '$workspace -> text -> pack( -fill => \'both\', -expand => \'1\');',
-     'bless($workspace,ref(\'Tk::Workspace\'));',
-     '$workspace -> bind;',
+     'bless($workspace,\'Tk::Workspace\');',
      '$workspace -> wrap( $wrap );',
      '$workspace -> geometry( $geometry, $insert );',
+     '$workspace -> commandline;',
      'MainLoop;' );
 
 my $defaultbackgroundcolor="white";
 my $defaultforegroundcolor="black";
 my $defaulttextfont="*-courier-medium-r-*-*-12-*";
 my $menufont="*-helvetica-medium-r-*-*-12-*";
-
 my $clipboard;          # Internal clipboard.
 
 sub new {
     my $proto = shift;
     my $class = ref( $proto ) || $proto;
-    my %args = @_;
+    my @construct_args = @_;
+    my @cmd_args = &custom_args( @ARGV );
     my $self = {
 	window => new MainWindow,
-	name => ((@_)?@_:'Workspace'),
+	name => 'workspace',
 	textfont => undef,
 	# default is approximate width and height of 80x24 char. text widget
 	width => undef,
@@ -110,39 +136,125 @@ sub new {
 	scroll => undef,
 	scrollbuttons => undef,
 	insertionpoint => undef,
+	havenet => undef,
+	importfile => undef,
+	outputmode => undef,
+	outputfile => undef,
+	filter => undef,
         text => [],
+	cmdargs => ()
 	};
     bless($self, $class);
-    $self -> process_args( \%args );
+    my $i;
+    for( $i = 0; $i < $#construct_args; ) {
+      $self -> {$construct_args[$i]} = $construct_args[$i + 1];
+      $i += 2;
+    }
+    push @{$self -> {cmdargs}}, @cmd_args;
+    $self -> {havenet} = &requirecond( "Net::FTP" );
     $self -> {window} -> {parent} = $self;
     $self -> {text} = ($self -> {window}) -> 
 	    Scrolled ( 'TextUndo', -font => $defaulttextfont,
 		       -background => $defaultbackgroundcolor,
 		       -exportselection => 'true',
-		       -borderwidth => 0 );
+		       -borderwidth => 0,
+		     Name => 'workspaceText' );
     &menus( $self );
     &set_scroll( $self );
-
     my $t = $self -> text;
     $t -> Subwidget('yscrollbar') -> configure(-width=>10);
     $t -> Subwidget('xscrollbar') -> configure(-width=>10);
 
+    $self -> window -> protocol( WM_TAKE_FOCUS, sub{ $self -> wmgeometry});
     # Prevents errors when trying to paste from an empty clipboard.
     $t -> clipboardAppend( '' );
-
     $self -> focusFollowsMouse;
     $t -> focus;
     $t -> markGravity( 'insert', 'right' );
     return $self;
 }
 
-sub process_args {
-  my $self = shift;
-  my $args = shift;
-  foreach(keys %$args){ 
-     $self -> {$_} = $args -> {$_} 
+# Standard X11 toolkit arguments:
+# Refer to the Tk::CmdLine manual page.
+# one parameter each
+my @std_parm_args = ( '-background', '-bg,', '-class', '-display', 
+		 '-screen', '-font', '-fn', '-foreground',
+		 '-fg', '-title', '-xrm' );
+# no parameters
+my @std_bool_args = ( '-iconic', '-motif', '-synchronous' );
+
+sub custom_args {
+  my (@args) = @_;
+  my( @newargs, $i, $need_parm );
+  $need_parm = 0;
+ LOOP:
+  foreach $i ( @args ) { 
+    # POSIX-ly correct.
+    $i =~ s/--/-/;
+    if ( grep /$i/, @std_parm_args ) {
+      die "Missing required parameter for argument $prev_arg.\n" 
+	if $need_parm == 1;
+      $need_parm = 1;
+      $prev_arg = $i;
+      next LOOP;
+    } elsif ( grep /$i/, @std_bool_args ) { 
+      die "Missing required parameter for argument $prev_arg.\n" 
+	if $need_parm == 1;
+      $prev_arg = $i;
+      next LOOP;
+    } else {
+      if( $need_parm == 1 ) { 
+	$need_parm = 0;
+	next LOOP;
+      }
+      push @newargs, ($i);
+    }
+  }
+  return @newargs;
+}
+
+# Class-specific arguments.
+# Args that require a parameter.
+my @parm_args = ( '-importfile', '-textforeground', '-textbackground',
+		  '-exportfile' );
+# Boolean -- No parameter.
+my @bool_args = ('-help', '-write', '-quit', '-dump' );
+
+sub commandline {
+  my ($self) = @_;
+  my ($need_parm, $i, $prev_arg, $arg, $parameter, @workargs, $nargs );
+  $nargs = @{$self -> {cmdargs}};
+  for( $i =  $nargs; $i >= 0; $i-- ) { 
+    push @workargs, (${$self -> {cmdargs}}[$i]);
+  }
+  while( defined ( $i = pop @workargs ) ) {
+    $i =~ s/--/-/;
+    if( scalar( grep {/$i/} @parm_args ) > 0 ) {
+      die "Missing required parameter for argument $prev_arg.\n" 
+	if $need_parm == 1;
+      $need_parm = 1;
+      $prev_arg = $i;
+    } elsif ( grep {/$i/} @bool_args ) {
+      die "Missing parameter for argument $prev_arg.\n" 
+	if $need_parm == 1;
+      $need_parm = 0;
+      $prev_arg = $i;
+      # argument that is a boolean
+#      print "configure $i => 1 \n"; 
+      $i =~ s/\-//;
+      $self -> $i('1');
+    } elsif( $need_parm == 1 ) {
+      # parameter for argument.
+#      print "configure $prev_arg => $i \n"; 
+      $need_parm = 0;
+      $prev_arg =~ s/\-//;
+      $self -> $prev_arg($i);
+    } else {
+      die "Parameter error: $i, $prev_arg\n";
+    }
   }
 }
+
 
 ### 
 ### Class methods
@@ -152,6 +264,10 @@ sub bind {
 
     my $self = shift;
 
+    ($self -> window) -> SUPER::bind('<Alt-i>', 
+				    sub{$self -> user_import});
+    ($self -> window) -> SUPER::bind('<Alt-w>', 
+				    sub{$self -> ws_export});
     ($self -> window) -> SUPER::bind('<Alt-x>', 
 				    sub{$self -> ws_cut});
     ($self -> window) -> SUPER::bind('<Alt-c>', 
@@ -167,9 +283,9 @@ sub bind {
     ($self -> window) -> SUPER::bind('<Alt-u>', 
 				    sub{$self -> ws_undo});
     # unbind the right mouse button.
-    ($self -> window) -> bind('Tk::TextUndo', '<3>', '');
+    ($self -> window) -> SUPER::bind('Tk::TextUndo', '<3>', '');
 
-    $self -> {window} -> bind( '<ButtonPress-3>', 
+    $self -> {window} -> SUPER::bind( '<ButtonPress-3>', 
 			       [\&postpopupmenu, $self, Ev('x'), Ev('y') ] );
 }
 
@@ -199,20 +315,18 @@ sub ScrollMenuItems {
 	    ];
 }
 
-###
-### Instance methods.
-###
-
 sub menus {
     my $self = shift;
 
     $self -> {menubar} = ($self -> {window} ) -> 
 	Menu ( -type => 'menubar',
-	       -font => $menufont );
+	       -font => $menufont,
+	     Name => 'workspaceMenuBar');
     $self -> {popupmenu} = ($self -> {window} ) -> 
 	Menu ( -type => 'normal',
 	       -tearoff => '',
-	       -font => $menufont );
+	       -font => $menufont,
+	     Name => 'workspacePopupMenu' );
 
     $self -> {filemenu} = ($self -> {menubar}) -> Menu;
     $self -> {editmenu} = ($self -> {menubar}) -> Menu;
@@ -235,6 +349,7 @@ sub menus {
 	     -label => 'Options',
 	     -menu => $self -> {optionsmenu} );
     $self -> {menubar} -> add ('separator');
+
     $self -> {menubar}  -> 
 	add ('cascade',
 	     -label => 'Help',
@@ -270,9 +385,11 @@ sub menus {
 
     $self -> {filemenu} -> add ( 'command', -label => 'Import Text...',
 				 -state => 'normal',
-				 -command => sub{$self -> ws_import});
+				 -accelerator => 'Alt-I',
+				 -command => sub{$self -> user_import});
     $self -> {filemenu} -> add ( 'command', -label => 'Export Text...',
 				 -state => 'normal',
+				 -accelerator => 'Alt-W',
 				 -command => sub{$self -> ws_export});
     $self -> {filemenu} -> add ('separator');
     $self -> {filemenu} -> add ( 'command', -label => 'System Command...',
@@ -281,6 +398,9 @@ sub menus {
     $self -> {filemenu} -> add ( 'command', -label => 'Shell',
 				 -state => 'normal',
 				 -command => sub{ishell($self)});
+    $self -> {filemenu} -> add ( 'command', -label => 'Filter...',
+				 -state => 'normal',
+				 -command => sub{&filter_text($self)});
     $self -> {filemenu} -> add ('separator');
     $self -> {filemenu} -> add ( 'command', -label => 'Save...',
 				 -state => 'normal',
@@ -370,6 +490,61 @@ sub menus {
 				 -command => sub{$self -> self_help});
 }
 
+###
+### Instance methods.
+###
+
+sub textforeground {
+  my ($self, $arg) = @_;
+  ( $self -> {text} ) -> configure( -foreground => $arg );
+}
+
+sub textbackground {
+  my ($self, $arg) = @_;
+  ( $self -> {text} ) -> configure( -background => $arg );
+}
+
+sub importfile {
+  my ($self, $arg) = @_;
+  open I, "<$arg" or 
+    warn "Importfile: Couldn't open $arg: ".@!."\n";
+  while( <I> ) {
+    $self -> text -> insert( $self -> text -> index( 'insert' ),
+			     $_ );
+  }
+  close I;
+}
+
+sub exportfile {
+  my ($self, $arg) =@_;
+  open O, ">>$arg" or
+    warn "Exportfile: Couldn't open $arg: ".@!."\n";
+  print O $self -> text -> get( '1.0', 'end' );
+  close O;
+}
+
+sub dump {
+  my ($self, $arg) = @_;
+  print $self -> text -> get( '1.0', $self -> text -> index( 'end' ) );
+}
+
+sub write {
+  my ($self, $args) = @_;
+  $self -> write_to_disk( 0 );
+}
+
+sub quit {
+  my ($self, $arg) = @_;
+  $self -> window -> WmDeleteWindow;
+}
+
+sub title {
+  my ($self, $arg) = @_;
+  $self -> window -> configure( -title => $arg );
+  $self -> window -> update;
+  $self -> name( $arg );
+}
+
 sub window {
     my $self = shift;
     if (@_) { $self -> {window} = shift }
@@ -386,6 +561,12 @@ sub name {
     my $self = shift;
     if (@_) { $self -> {name} = shift }
     return $self -> {name}
+}
+
+sub help {
+  my $self = shift;
+  print STDERR $cmdhelptext;
+  $self -> window -> WmDeleteWindow;
 }
 
 sub textfont {
@@ -420,6 +601,18 @@ sub filemenu {
     my $self = shift;
     if (@_) { $self -> {filemenu} = shift }
     return $self -> {filemenu};
+}
+
+sub outputfile {
+    my $self = shift;
+    if (@_) { $self -> {outputfile} = shift }
+    return $self -> {outputfile};
+}
+
+sub filter {
+    my $self = shift;
+    if (@_) { $self -> {filter} = shift }
+    return $self -> {filter};
 }
 
 sub wrap {
@@ -495,6 +688,12 @@ sub x {
     return $self -> {x}
 }
 
+sub outputmode {
+    my $self = shift;
+    if (@_) { $self -> {outputmode} = shift }
+    return $self -> {outputmode}
+}
+
 sub y {
     my $self = shift;
     if (@_) { $self -> {y} = shift }
@@ -507,13 +706,15 @@ sub scroll {
     return $self -> {scroll}
 }
 
+sub havenet {
+  return $self -> {havenet};
+}
+
 sub insertionpoint {
     my $self = shift;
     if (@_) { $self -> {insertionpoint} = shift }
     return $self -> {insertionpoint}
 }
-
-
 
 sub open {
     my ($name) = @_;
@@ -522,20 +723,34 @@ sub open {
     system( @command_line );
 }
 
+sub wmgeometry {
+  my ($self) = @_;
+  my $g = $self -> window -> geometry;
+  $g =~ m/([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)/;
+  $self -> width($1); $self -> height($2); $self -> x($3); 
+  $self -> y($4);
+  $self -> geometry( $g, $self -> text -> index( 'insert' ) );
+}
+
 sub geometry {
-    my $self = shift;
-    my $g = shift;
-    my $i = shift;
-
-    $g =~ m/([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)/;
-    $self -> width($1); $self -> height($2); $self -> x($3); 
-    $self -> y($4);
-
-    $self -> window -> geometry( $g );
-
-    $self -> insertionpoint( $i );
-    $self -> text -> markSet( 'insert', $self -> insertionpoint );
-    $self -> text -> see( 'insert' );
+    my ($self, $g, $i) = @_;
+    my $nargs = scalar @_;
+    if( $nargs == 3 ) {
+      $g =~ m/([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)/;
+      $self -> width($1); $self -> height($2); $self -> x($3); 
+      $self -> y($4);
+      $self -> window -> geometry( $g );
+      $self -> insertionpoint( $i );
+      $self -> text -> markSet( 'insert', $self -> insertionpoint );
+      $self -> text -> see( 'insert' );
+    } elsif ( $nargs == 1 ) {
+      my $cg = $self -> width.'x'.$self -> height.'+'.$self -> x.'+'.
+        $self -> y;
+      my $ip = $self -> text -> index( 'insert' );
+      return ($cg, $ip);
+    } else {
+       warn "geometry: wrong no. of arguments: $nargs.\n";
+    }
 }
 
 sub postpopupmenu {
@@ -708,7 +923,8 @@ sub fontdialogapply {
     $newwidth = ($self -> text) -> reqwidth;
     $newheight = ($self -> text) -> reqheight;
     ($self -> window) -> geometry($newwidth . 'x' . $newheight .
-				    '+' . $x . '+' . $y );
+				  '+' . $x . '+' . $y, 
+				  $self -> insertionpoint );
 }
 
 sub fontdialogclose {
@@ -724,9 +940,119 @@ sub elementColor {
   $c -> Show;
 }
 
+sub filter_text {
+  my $self = shift;
+  my $resp = $self -> filter_dialog;
+  return if $resp =~ /Cancel/;
+  $self -> watchcursor;
+  my $name = $self -> name;
+  my $cmd = $self -> filter;
+  return if $cmd eq '';
+  my $tmpname = $self -> mktmpfile;
+  my $cmdstring;
+  if( $cmd =~ /-/ ) { 
+    $cmdstring = "cat $tmpname | $cmd";
+  } else {
+    $cmdstring = "$cmd \< $tmpname";
+  }
+  if( ( $self -> outputmode ) =~ /self/ ) {
+    $self->text->insert($self->text->index('insert'),`$cmdstring`);
+    `rm -f $tmpname`;
+  }
+  if( ( $self -> outputmode ) =~ /file/ ){
+    my $ofilename = $self -> outputfile;
+    if( $ofilename ne '' ) {
+      `$cmdstring >$ofilename`;
+    }
+  }
+  if( ( $self -> outputmode ) =~ /terminal/ ) {
+    my $ofilename = $self -> outputfile;
+    $cmdstring = $cmdstring . (($ofilename ne '') ? ' >'.$ofilename : '');
+    system $cmdstring;
+    `rm -f $tmpname`;
+  }
+  if( ( $self -> outputmode ) =~ /new/ ) { 
+    my $newname = $self -> outputfile;
+    return if $newname eq '';
+    &create( $newname );
+    my $outfile = "$tmpname.output";
+    `$cmdstring >$outfile`;
+    `./$newname -importfile $outfile -write -quit &`;
+    `rm -f $tmpname $outfile`;
+  }
+  $self -> defaultcursor;
+}
+
+sub mktmpfile {
+  my $self = shift;
+  my $name = $self -> name;
+  open FILE, ">/tmp/$name$$.tmp" 
+    or warn "Could not open /tmp/$name$$\: @!\n";
+  my $contents = $self -> text -> get( '1.0', 'end' );
+  printf FILE $contents;
+  close FILE;
+  return "/tmp/$name$$.tmp";
+}
+
+sub filter_dialog {
+  my $self = shift;
+  my $dw = ($self->window)->DialogBox( -title => 'Filter',
+				     -buttons => ['Ok', 'Cancel']);
+  my $f1 = $dw -> Frame( -container => '0' );
+  my $f2 = $dw -> Frame( -container => '0', -relief => groove,
+		       -borderwidth => '3' );
+  my $f3 = $dw -> Frame( -container => '0' );
+  my $cl = $f1 -> Label( -text => 'Filter:', -font => $menufont );
+  $cl -> pack( -side => 'left' );
+  my $cm = $f1 -> Entry( -width => 47 )
+    -> pack( -side => 'left', -padx => 5 );
+  $f1 -> pack( -ipady => 10, -fill => 'both', -expand => '1' );
+  $f2 -> Label( -text => "\nOutput To:", -font => $menufont )
+    -> pack( -anchor => 'w' );
+  my $b1 = $f2 -> Radiobutton ( -text => 'Self',
+				-font => $menufont,
+				-state => 'normal',
+				-variable => \$self -> {outputmode}, 
+				-value => 'self' ) 
+    -> pack( -side => 'left' );
+  my $b2 = $f2 -> Radiobutton ( -text => 'File',
+				-font => $menufont,
+				-state => 'normal',
+				-variable => \$self -> {outputmode}, 
+				-value => 'file' ) 
+    -> pack( -side => 'left' );
+  my $b3 = $f2 -> Radiobutton ( -text => 'Terminal',
+				-font => $menufont,
+				-state => 'normal',
+				-variable => \$self -> {outputmode}, 
+				-value => 'terminal' ) 
+    -> pack( -side => 'left' );
+  my $b4 = $f2 -> Radiobutton ( -text => 'New Workspace',
+				-font => $menufont,
+				-state => 'normal',
+				-variable => \$self -> {outputmode}, 
+				-value => 'new' ) 
+    -> pack( -side => 'left' );
+  $b1 -> select;
+  $f2 -> Label( -text => "\n" ) -> pack( -anchor => 'w' );
+  $f2 -> pack( -expand => '1', -fill => 'both',
+	     -ipady => 10);
+  $f3 -> Label( -text => 'Output File: ',
+	      -font => $menufont ) 
+    -> pack( -side => 'left' );
+  my $ofil = $f3 -> Entry( -width => 40 ) 
+    -> pack( -side => 'left', -expand => '1', -fill => 'x', -padx => 5 );
+  $f3 -> Label( -text => "\n" ) -> pack( -anchor => 'w' );
+  $f3 -> pack( -expand => '1', -fill => 'x' );
+  my $resp = $dw -> Show;
+  $self->filter( $cm -> get );
+  $self->outputfile( $ofil -> get );
+  return $resp;
+}
+
 sub write_to_disk {
     my $self = shift;
-    my $quit = shift;   # Close workspace if true
+    my $quit = shift;
     my $workspacename = $self -> name;
     my $height = $self -> height;
     my $width = $self -> width;
@@ -753,12 +1079,13 @@ sub write_to_disk {
 	    goto EXIT;
 	}
     }
-
+    $self -> watchcursor;
     open FILE, ">>" . $tmppath;
     $contents = ($self -> text) -> get( '1.0', end );
     printf FILE '#!/usr/bin/perl' . "\n";
 
-    $geometry= ($self -> window) -> geometry;
+    ($geometry, $ip) = $self -> geometry;
+#    $geometry= ($self -> window) -> geometry;
     $geometry =~ m/([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)/;
     $width = $1; $height = $2; $x = $3; $y = $4;
 
@@ -797,7 +1124,7 @@ sub write_to_disk {
 	   my @remove_old = ( 'mv', $tmppath, $workspacepath );
 	   system( @remove_old );
 	   chmod 0755, $workspacepath;
-
+    $self -> defaultcursor;
 EXIT:	   if ( $quit ) { $self -> window -> WmDeleteWindow; }
 	
 }
@@ -819,6 +1146,9 @@ sub create {
     #Name the workspace...
     my @tmpobject = @Workspaceobject;
     grep { s/name\=\'\'/name\=\'$workspacename\'/ } @tmpobject;
+grep 
+{ s/Construct Tk::Workspace/Construct Tk::Workspace \'$workspacename\'\;/ } 
+@tmpobject;
 
     open FILE, ">" . $workspacename 
 	or die "Can't open Workspace " . $workspacename;
@@ -970,7 +1300,12 @@ sub about {
     $aboutdialog -> Show;
 }
 
-sub ws_import {
+sub cmd_import {
+  my( $ws, $args ) = @_;
+  print "$args\n";
+}
+
+sub user_import {
 
     my $self = shift;
     my $import;
@@ -979,36 +1314,78 @@ sub ws_import {
     my $l;
     my $nofiledialog;
     
+    
     $filedialog = ($self -> {window}) 
-	-> FileSelect ( -directory => '.');
+	-> RemoteFileSelect ( -directory => '.');
     $filename = $filedialog -> Show;
 
-    if ( $filename ) {
-	open IMPORT, "< $filename" or &filenotfound($self);
-    }
-
-    while ( $l = <IMPORT> ) {
+    $self -> watchcursor;
+    if( $filename =~ /\:/ ) {
+      my $hostname = $filedialog -> cget( -hostname );
+      my $uid = $filedialog -> cget( -userid );
+      my $passwd = $filedialog -> cget( -password );
+      my $transcript = $filedialog -> cget( -transcript );
+      $filename =~ s/^.*\://;
+      $filename =~ /^.*\/(.*)/;
+      my $basename = $1;
+      my $tmpfile = "/tmp/$basename";
+      my $ftp = Net::FTP->new( $hostname, $transcript );
+      $ftp -> login( $uid, $passwd );
+      if ( ( $ftp -> get( $filename, $tmpfile ) ) ne $tmpfile ) {
+	print "Could not create $hostname:$filename.\n";
+      }
+      open IMPORT, "< $tmpfile" or &filenotfound($self);
+      while ( $l = <IMPORT> ) {
 	($self -> {text}) -> insert ( 'insert', $l );
+      }
+      ($self -> {text}) -> pack;
+      close IMPORT;
+      $ftp -> quit;
+      unlink ($tmpfile);
+    } elsif ( $filename ) {
+      open IMPORT, "< $filename" or &filenotfound($self);
+      while ( $l = <IMPORT> ) {
+	($self -> {text}) -> insert ( 'insert', $l );
+      }
+      ($self -> {text}) -> pack;
+      close IMPORT;
     }
-    ($self -> {text}) -> pack;
-    close IMPORT;
+    $self -> defaultcursor;
 }
 
 sub ws_export {
     my $self = shift;
     my $filedialog;
     my $filename;
-    my $filename;
 
-
-    $filedialog = ($self -> {window})->FileSelect ( -directory => '.' );
+    $self -> watchcursor;
+    $filedialog = ($self -> {window})->RemoteFileSelect ( -directory => '.' );
     $filename = $filedialog -> Show;
-
-    open OFN, "+> $filename" or &filenotfound( $self );
-
-    print OFN ($self -> {text}) -> get( '1.0', 'end' );
-
-    close OFN;
+    if( $filename =~ /\:/ ) {
+      my $hostname = $filedialog -> cget( -hostname );
+      my $uid = $filedialog -> cget( -userid );
+      my $passwd = $filedialog -> cget( -password );
+      my $transcript = $filedialog -> cget( -transcript );
+      $filename =~ s/^.*\://;
+      $filename =~ /^.*\/(.*)/;
+      my $basename = $1;
+      my $tmpfile = "/tmp/$basename";
+      open OFN, "+> $tmpfile" or &filenotfound( $self );
+      print OFN ($self -> {text}) -> get( '1.0', 'end' );
+      close OFN;
+      my $ftp = Net::FTP->new( $hostname, $transcript );
+      $ftp -> login( $uid, $passwd );
+      if ( ( $ftp -> put( $tmpfile, $filename ) ) ne $filename ) {
+	print "Could not create $hostname:$filename.\n";
+      }
+      $ftp -> quit;
+      unlink ($tmpfile);
+    } else {
+      open OFN, "+> $filename" or &filenotfound( $self );
+      print OFN ($self -> {text}) -> get( '1.0', 'end' );
+      close OFN;
+    }
+    $self -> defaultcursor;
 }
 
 sub close_dialog {
@@ -1068,6 +1445,8 @@ sub self_help {
 		     -font => $defaulttextfont,
 		     -scrollbars => 'e' ) -> pack( -fill => 'both',
 						   -expand => 1 );
+    $textwidget -> Subwidget('yscrollbar') -> configure(-width=>10);
+    $textwidget -> Subwidget('xscrollbar') -> configure(-width=>10);
     $textwidget -> insert( 'end', $help_text );
 
     $buttonframe -> Button( -text => 'Close',
@@ -1089,24 +1468,58 @@ sub libname {
   }
 }
 
+sub requirecond {
+  my ($modulename) = @_;
+  my ($filename, $fullname, $result);
+  $filename = $modulename;
+  $filename .= '.pm' if $filename !~ /.pm$/;
+  $filename =~ s/\:\:/\//;
+  foreach my $prefix ( @INC ) {
+    $fullname = "$prefix/$filename";
+    if( -f $fullname ) { 
+      do $fullname;
+      return '1';
+    }
+  }
+  return '0';
+}
+
+# for each subwidget
+sub watchcursor {
+  my $app = shift;
+  $app -> window -> Busy( -recurse => '1' );
+}
+
+sub defaultcursor {
+  my $app = shift;
+  $app -> window -> Unbusy( -recurse => '1' );
+}
+
 
 1;
 __END__
 
 =head1 NAME
 
-  Workspace.pm -- Persistent, multi-purpose text processor.
-  (File browser, shell, editor) script. Requires Perl/Tk.
+  Workspace.pm--Persistent, multi-purpose text processor.
+  (File browser, shell, editor) script. 
+  Requires Perl/Tk; optionally Net::FTP.
 
 =head1 SYNOPSIS
 
    # Create a workspace from the shell prompt:
 
-     #mkws "workspace"
+       mkws "workspace"
 
    # Open an existing workspace from the shell prompt:
 
-     #./workspace <options> &
+       workspace [-background | -bg <color>] [-textbackground <color>]
+                 [-foreground | -fg <color>] [-textforeground <color>]
+                 [-font | -fn <fontdesc>] [-importfile <filename>]
+                 [-exportfile <filename>] [-dump] [-xrm <pattern>]
+                 [-class <Classname>] [-display | -screen <dpyname>]
+                 [-title <workspacename>] [-help] [-iconic] 
+                 [-motif] [-synchronous] [-write] [-quit]
 
    # Open from a Perl script:
 
@@ -1115,19 +1528,21 @@ __END__
 
       Tk::Workspace::open(Tk::Workspace::create("workspace"));
 
-   # Create workspace object:
+   # Create workspace object within a Perl script:
 
-      $w = Tk::Workspace -> new( textfont => "*-courier-medium-r-*-*-12-*",
+      $w = Tk::Workspace -> new( x => 100,
+                                 y => 100,
+                                 width => 300,
+                                 height => 250,
+				 textfont => "*-courier-medium-r-*-*-12-*",
                                  foreground => 'white',
                                  background => 'black',
+                                 menuvisible => 'true',
                                  scroll => 'se',
-                                 height => 351,
-                                 width => 565,
-                                 x => 100,
-                                 y => 100,
-                                 insertionpoint => '1.0',
+                                 insert => '1.0',
                                  menubarvisible => 'True',
-                                 text => 'Text to be inserted' );
+                                 text => 'Text to be inserted',
+                                 name => 'workspace' );
 
 =head1 DESCRIPTION
 
@@ -1135,20 +1550,146 @@ Workspace uses the Tk::TextUndo widget to create an embedded Perl
 text editor.  The resulting file can be run as a standalone
 program.  
 
-=head1 COMMAND LINE OPTIONS
+=head1 OPTIONS
 
-A Workspace recognizes the same command line options as its 
-parent Tk::MainWindow.  Refer to the Tk::CmdLine manual 
-page for a list of the options and their function.
+In normal use, common X toolkit options apply to non-text 
+areas, like the window border and menus. Text resources can
+also be specified, but they often have a lower priority 
+than the Workspace's saved values and user selections. 
+Refer to the section: X RESOURCES, below.
 
-The command line options and the workspace parameters generally
-complement each other.  The command line color and font options act on
-the widget colors; e.g., menus and dialogs, while the embedded values
-specify colors and fonts for editable text.  The most notable
-exception to a standard command-line option is -geometry, where a
-Workspace will use its persistent geometry (that is, the default
-geometry when last saved), instead of a command line geometry
-specification.
+Command line options are described more fully in the Tk::CmdLine
+manual page.
+
+=head2 X Toolkit Options
+
+=over 4 
+
+=item -foreground | -fg <color>
+
+Foreground color of widgets.  -fg is a synonym for -foreground.
+
+=item -background | -bg <color>
+
+Background color of widgets.  -bg is a synonym for -background.
+
+=item -class <classname>
+
+Name of X Window resource class.  In normal use, this is overriden
+by the Workspace name.
+
+=item -display | -screen <displayname>
+
+Name of X display.  -screen is a synonym for -display.
+
+=item -font | -fn <fontname>
+
+Font descriptor for widgets.  -fn is a synonym for -font.
+
+=item -iconic 
+
+Start with the window iconfied.
+
+=item -motif 
+
+Adhere as closely as possible to Motif look-and-feel standards.
+
+=item -name <resourcename>
+
+Specifies the name under which X resources can be found.  Refer 
+to the section: X RESOURCES, below.
+
+=item -synchronous
+
+Requests should be sent to the X server synchronously.  Mainly
+useful for debugging.
+
+=item -title <windowtitle>
+
+Title of the window.  This is overridden by the Workspace.
+
+=item -xrm <resourcestring>
+
+Specifies a resource pattern to override defaults.  Refer
+to the section: X RESOURCES, below.
+
+=back     
+
+=head2 Workspace Specific Options
+
+=over 4
+
+=item -textforeground <color>
+
+Set the color of the text foreground.  Overrides the Workspace's
+own setting.
+
+=item -textbackground <color>
+
+Set the color of the text background.  Overrides the Workspace's
+own setting.
+
+=item -importfile <filename>
+
+At startup, import <filename> into the workspace at the cursor
+position.
+
+=item -exportfile <filename>
+
+Export the text of the workspace to <filename>.
+
+=item -title <workspacename>
+
+Set the window title and workspace name.
+
+=item -write
+
+Save the workspace in its current state.  If the window is not
+yet drawn, use the default geometry of 565x351+100+100 and
+insertion cursor index of 1.0.
+
+=item -dump
+
+Print the Workspace text to standard output.
+
+=item -quit
+
+Close the Workspace without saving.
+
+=back 
+
+=head1 X RESOURCES
+
+In normal use, a workspace's Xresources begin with its name
+in lower-case letters. 
+
+  myworkspace*borderwidth:       3
+  myworkspace*relief:            sunken
+  myworkspace*takefocus:         true
+
+Top-level options are described in the Tk::Toplevel and Tk::options
+manual pages.
+
+In addition, several subwidgets have standard names, so properties
+can easily apply to all Workspaces: 
+
+      Widget             Resource Name
+      ------             -------------
+      Text Editor        workspaceText
+      Menu Bar Menus     workspaceMenuBar
+      Popup Menus        workspacePopupMenu
+
+Examples of resource settings that apply to all Workspaces:
+
+  *workspaceText*insertwidth:         5
+  *workspaceText*spacing1:            20
+  *workspaceMenuBar*foreground:       white
+  *workspaceMenuBar*background:       darkslategray
+  *workspacePopupMenu*foreground:     white
+  *workspacePopupMenu*background:     mediumgray
+
+Complete descriptions of the options that each widget recognizes
+are given in the Tk::Text, Tk::TextUndo, and Tk::Menu manual pages.
 
 =head1 MENU FUNCTIONS
 
@@ -1189,6 +1730,18 @@ Refer to the bash(1) manual page for further information.
 
 Typing 'exit' leaves the shell and returns the workspace to normal
 text editing mode.
+
+Filter -- Specify a filter and output destination for the text in the
+Workspace.  A ``filter'' is defined as a program that takes its input
+from standard input, STDIN, and sends its output to standard output,
+STDOUT.  By default, output is inserted into the Workspace at the
+cursor position.  Other destinations are:
+
+  - File--Write output to the file name specified.
+  - Terminal--Write output to the Workspace's STDOUT or to a 
+    character device specified as the output file.
+  - New Workspace--Write output to a new Workspace with the
+    name specified.
 
 Save -- Save the workspace to disk.
 
@@ -1234,10 +1787,14 @@ mouse button (Button 3) over the text area.
 
 Color Editor -- Pops up a Color Editor window.  You can select the
 text attribute that you want to change from the Colors -> Color
-Attributes menu.  Pressing the Apply... button at the bottom of the
-Color Editor applies the color selection to the text.  The most useful
-attributes for Workspace text are foreground, background, and
-insertBackground.
+Attributes menu.  If your system libraries have an rgb.txt file, a
+list of the available colors is displayed on the left-hand side of the
+window.  Double-clicking on a color name, or selecting its color space
+parameters from the sliders in the middle of the ColorEditor, displays
+that color in the swatch on the right-hand side of the window.
+Pressing the Apply... button at the bottom of the Color Editor applies
+the color selection to the text.  The most useful attributes for
+Workspace text are foreground, background, and insertBackground.
 
 Text Font -- Select text font from list of system fonts.
 
@@ -1256,6 +1813,8 @@ and Tk::bind man pages.
 
     Alt-Q                 Quit, Optionally Saving Text
     Alt-S                 Save Workspace to Disk
+    Alt-I                 Import Text
+    Alt-W                 Export Text
     Alt-U                 Undo
     Alt-X                 Copy Selection to Clipboard and Delete
     Alt-C                 Copy Selection to Clipboard
@@ -1327,15 +1886,18 @@ and Tk::bind man pages.
 There is no actual API specification, but Workspaces recognize
 the following instance methods:
 
-about, bind, close_dialog, create, editmenu, elementColor,
-evalselection, filemenu, filenotfound, fontdialogaccept,
-fontdialogapply, fontdialogclose, geometry, goto_line, height,
-helpmenu, insert_output, insertionpoint, ishell, libname, menubar,
-menubarvisible, menus, my_directory, name, new, open, optionsmenu,
-parent_ws, popupmenu, postpopupmenu, process_args, prompt, scroll,
-scrollbar, self_help, set_scroll, shell_client, shell_cmd, text,
-textfont, togglemenubar, what_line, width, window, wrap,
-write_to_disk, ws_copy, ws_cut, ws_export, ws_font, ws_import,
+about, bind, close_dialog, cmd_import, commandline, create,
+custom_args, defaultcursor, do_win_signal_event, dump, editmenu,
+elementColor, evalselection, exportfile, filemenu, filenotfound,
+filter, filter_dialog, filter_text, fontdialogaccept, fontdialogapply,
+fontdialogclose, geometry, goto_line, havenet, height, helpmenu,
+importfile, insertionpoint, libname, menubar, menubarvisible, menus,
+mktmpfile, my_directory, name, new, open, optionsmenu, outputfile,
+outputmode, parent_ws, popupmenu, postpopupmenu, quit, requirecond,
+scroll, scrollbar, self_help, set_scroll, text, textbackground,
+textfont, textforeground, title, togglemenubar, user_import,
+watchcursor, what_line, width, window, wmgeometry, workspaceobject,
+wrap, write, write_to_disk, ws_copy, ws_cut, ws_export, ws_font,
 ws_paste, ws_undo, x, y
 
 The following class methods are available:
@@ -1343,7 +1905,7 @@ The following class methods are available:
 new, ScrollMenuItems, WrapMenuItems, workspaceobject.
 
 The 'new' constructor recognizes the settings of the following
-options, which are used by Workspace.pm :
+options, which are used by the Workspace.pm :
 
 window, name, textfont, width, height, x, y, foreground, 
 background, textfont, filemenu, editmenu, optionsmenu, 
@@ -1354,13 +1916,13 @@ menubarvisible, scroll, scrollbuttons, insertionpoint, text
 
 Tk::Workspace by rkiesling@mainmatter.com (Robert Kiesling)
 
-  Perl/Tk by Nick Ing-Simmons.
-  Tk::ColorEditor widget by Steven Lidie.
-  Perl by Larry Wall and many others.
+Perl/Tk by Nick Ing-Simmons.
+Tk::ColorEditor widget by Steven Lidie.
+Perl by Larry Wall and many others.
 
 =head1 REVISION 
 
-$Id: Workspace.pm,v 1.50 2000/10/28 19:26:59 kiesling Exp kiesling $
+$Id: Workspace.pm,v 1.53 2000/11/25 20:08:52 kiesling Exp kiesling $
 
 =head1 SEE ALSO:
 
