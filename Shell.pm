@@ -1,5 +1,5 @@
 package Tk::Shell;
-my $RCSRevKey = '$Revision: 0.43 $';
+my $RCSRevKey = '$Revision: 0.44 $';
 $RCSRevKey =~ /Revision: (.*?) /;
 $VERSION=$1;
 
@@ -35,8 +35,8 @@ redirected STDERR from the shell prompt), and goes on, instead of
 killing the process that's running the browser.
 
 This module is tested under several varieties of Linux, and Solaris.
-It is untested, and probably unusable, under MS Windoze, but who
-cares?
+It is untested, and probably unusable, under MS Windoze.
+
 
 =cut
 
@@ -215,7 +215,8 @@ sub shell_cmd {
     local $cmdentry;
     tie( *TEXT, 'Tk::TextUndo', $t );
     $cmddialog = ($self -> window) -> Dialog( -title => 'Shell Command',
-					      -buttons => ["Cancel"]);
+				      -buttons => ["Ok", "Cancel"],
+				      -default_button => "Ok" );
     $cmdentry = $cmddialog -> add( 'Entry', -width => 30 ) -> pack;
     $cmddialog -> Show;
     $cmd = $cmdentry -> get;

@@ -1,5 +1,5 @@
 package Tk::Workspace;
-my $RCSRevKey = '$Revision: 1.48 $';
+my $RCSRevKey = '$Revision: 1.50 $';
 $RCSRevKey =~ /Revision: (.*?) /;
 $VERSION=$1;
 
@@ -59,18 +59,17 @@ my @Workspaceobject =
      'use Tk;',
      'use FileHandle;',
      'use Env qw(HOME);',
-     'my $workspace = Tk::Workspace -> new ( menubar => $menuvisible, ',
+     'my $workspace = Tk::Workspace -> new ( menubarvisible => $menuvisible, ',
                                         'scroll => $scrollbars );',
      '$workspace -> name($name);',
      '$workspace -> textfont($font);',
      '$workspace -> text -> insert ( \'end\', $text );',
      '$workspace -> text -> configure( -foreground => $fg, -background => $bg, -font => $font, -insertbackground => $fg );',
-     '$workspace -> text -> markSet( \'insert\', $insert );',
      '$workspace -> text -> pack( -fill => \'both\', -expand => \'1\');',
      'bless($workspace,ref(\'Tk::Workspace\'));',
      '$workspace -> bind;',
      '$workspace -> wrap( $wrap );',
-     '$workspace -> geometry( $geometry );',
+     '$workspace -> geometry( $geometry, $insert );',
      'MainLoop;' );
 
 my $defaultbackgroundcolor="white";
@@ -84,7 +83,6 @@ sub new {
     my $proto = shift;
     my $class = ref( $proto ) || $proto;
     my %args = @_;
-    my $menustatus = $args{menubar};
     my $self = {
 	window => new MainWindow,
 	name => ((@_)?@_:'Workspace'),
@@ -115,31 +113,35 @@ sub new {
         text => [],
 	};
     bless($self, $class);
-    &process_args( $self, %args);
-    $self -> {menubarvisible} = $menustatus;
+    $self -> process_args( \%args );
     $self -> {window} -> {parent} = $self;
     $self -> {text} = ($self -> {window}) -> 
 	    Scrolled ( 'TextUndo', -font => $defaulttextfont,
 		       -background => $defaultbackgroundcolor,
-		       -exportselection => 'true');
-    ($self -> text) -> markGravity( 'insert', 'right' );
-    ($self -> text) -> Subwidget('yscrollbar') -> configure(-width=>10);
-    ($self -> text) -> Subwidget('xscrollbar') -> configure(-width=>10);
+		       -exportselection => 'true',
+		       -borderwidth => 0 );
+    &menus( $self );
+    &set_scroll( $self );
 
+    my $t = $self -> text;
+    $t -> Subwidget('yscrollbar') -> configure(-width=>10);
+    $t -> Subwidget('xscrollbar') -> configure(-width=>10);
 
     # Prevents errors when trying to paste from an empty clipboard.
-    ($self -> text) -> clipboardAppend( '' );
-    &menus( $self );
-    &set_scroll($self);
+    $t -> clipboardAppend( '' );
 
-    $self -> text -> focus;
-    $self -> text -> see( 'insert' );
+    $self -> focusFollowsMouse;
+    $t -> focus;
+    $t -> markGravity( 'insert', 'right' );
     return $self;
 }
 
 sub process_args {
-  my ($self, %args) = @_;
-  foreach(keys %args){ $self->{$_}=$args{$_} }
+  my $self = shift;
+  my $args = shift;
+  foreach(keys %$args){ 
+     $self -> {$_} = $args -> {$_} 
+  }
 }
 
 ### 
@@ -392,6 +394,10 @@ sub textfont {
     return $self -> {textfont}
 }
 
+sub workspaceobject {
+  return @Workspaceobject;
+}
+
 sub menubar {
     my $self = shift;
     if (@_) { $self -> {menubar} = shift }
@@ -519,12 +525,17 @@ sub open {
 sub geometry {
     my $self = shift;
     my $g = shift;
+    my $i = shift;
 
     $g =~ m/([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)/;
     $self -> width($1); $self -> height($2); $self -> x($3); 
     $self -> y($4);
 
     $self -> window -> geometry( $g );
+
+    $self -> insertionpoint( $i );
+    $self -> text -> markSet( 'insert', $self -> insertionpoint );
+    $self -> text -> see( 'insert' );
 }
 
 sub postpopupmenu {
@@ -706,9 +717,10 @@ sub fontdialogclose {
 }
 
 sub elementColor {
-  my ($self) = @_;
+  my ($w) = @_;
+  my ($attribute, $color);
   my $c = 
-    $self -> window -> ColorEditor( -widgets => [$self -> text]);
+    $w -> window -> ColorEditor( -widgets => [$w -> text] );
   $c -> Show;
 }
 
@@ -880,6 +892,7 @@ sub ws_paste {
     $point = ($self -> {text}) -> index("insert");
     ($self -> {text}) -> insert( $point,
 				      $selection);
+    ($self -> {text}) -> see( 'insert' );
     return $selection;
 }
 
@@ -1221,8 +1234,10 @@ mouse button (Button 3) over the text area.
 
 Color Editor -- Pops up a Color Editor window.  You can select the
 text attribute that you want to change from the Colors -> Color
-Attributes menu.  Pressing the Apply... button at the bottom of
-the Color Editor applies the color selection to the text.  
+Attributes menu.  Pressing the Apply... button at the bottom of the
+Color Editor applies the color selection to the text.  The most useful
+attributes for Workspace text are foreground, background, and
+insertBackground.
 
 Text Font -- Select text font from list of system fonts.
 
@@ -1315,7 +1330,7 @@ the following instance methods:
 about, bind, close_dialog, create, editmenu, elementColor,
 evalselection, filemenu, filenotfound, fontdialogaccept,
 fontdialogapply, fontdialogclose, geometry, goto_line, height,
-helpmenu, insert_output, insertionpoint, ishell, menubar,
+helpmenu, insert_output, insertionpoint, ishell, libname, menubar,
 menubarvisible, menus, my_directory, name, new, open, optionsmenu,
 parent_ws, popupmenu, postpopupmenu, process_args, prompt, scroll,
 scrollbar, self_help, set_scroll, shell_client, shell_cmd, text,
@@ -1325,10 +1340,10 @@ ws_paste, ws_undo, x, y
 
 The following class methods are available:
 
-WrapMenuItems, ScrollMenuItems.
+new, ScrollMenuItems, WrapMenuItems, workspaceobject.
 
 The 'new' constructor recognizes the settings of the following
-options, which are used by the Workspace.pm :
+options, which are used by Workspace.pm :
 
 window, name, textfont, width, height, x, y, foreground, 
 background, textfont, filemenu, editmenu, optionsmenu, 
@@ -1339,17 +1354,17 @@ menubarvisible, scroll, scrollbuttons, insertionpoint, text
 
 Tk::Workspace by rkiesling@mainmatter.com (Robert Kiesling)
 
-Perl/Tk by Nick Ing-Simmons.
-Tk::ColorEditor widget by Steven Lidie.
-Perl by Larry Wall and many others.
+  Perl/Tk by Nick Ing-Simmons.
+  Tk::ColorEditor widget by Steven Lidie.
+  Perl by Larry Wall and many others.
 
 =head1 REVISION 
 
-$Id: Workspace.pm,v 1.48 2000/10/24 22:20:27 kiesling Exp kiesling $
+$Id: Workspace.pm,v 1.50 2000/10/28 19:26:59 kiesling Exp kiesling $
 
 =head1 SEE ALSO:
 
-Tk::overview(1), Tk::ColorEditor, perl(1) manual pages.
+Tk::overview(1), Tk::ColorEditor(1), perl(1) manual pages.
 
 =cut
 
