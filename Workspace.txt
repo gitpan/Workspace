@@ -1,0 +1,209 @@
+NAME
+    Workspace.pm -- Library to create and use a persistent, embedded Perl
+    workspace (file browser, shell, editor) script using Perl/Tk.
+
+SYNOPSIS
+       # Create a workspace from the shell prompt:
+
+         #mkws "workspace"
+
+       # Open an existing workspace:
+
+         #./workspace &
+
+       # In a Perl script:
+
+          use Tk::Workspace;
+
+          Tk::Workspace::open(Tk::Workspace::create("workspace"));
+
+DESCRIPTION
+    Workspace uses the Tk::TextUndo widget to create an embedded Perl text
+    editor. The resulting file can be run as a standalone program.
+
+MENU FUNCTIONS
+    A workspace contains a menu bar with File, Edit, Options, and Help
+    menus.
+
+    The menus also pop up by pressing the right mouse button (Button-3) over
+    the text area, whether the menu bar is visible or not.
+
+    The menu functions are provided by the Tk::Workspace, Tk::TextUndo,
+    Tk::Text, and Tk::Widget modules.
+
+  File Menu
+
+    Import Text -- Insert the contents of a selected text file at the
+    insertion point.
+
+    Export Text -- Write the contents of the workspace to a text file.
+
+    System Command -- Prompts for the name of a command to be executed by
+    the shell, /bin/sh. The output is inserted into the workspace.
+
+    For example, to insert a manual page into the workspace, enter:
+
+       man <programname> | colcrt - | col -b
+
+    Shell -- Starts an interactive shell. The prompt is the PS1 prompt of
+    the environment where the workspace was started. At present the
+    workspace shell recognizes only a subset of the bash prompt variables,
+    and does not implement command history or setting of environment
+    variables in the subshell. Refer to the bash(1) manual page for further
+    information.
+
+    Typing 'exit' leaves the shell and returns the workspace to normal text
+    editing mode.
+
+    Save -- Save the workspace to disk.
+
+    Quit -- Close the workspace window, optionally saving to disk.
+
+  Edit Menu
+
+    Undo -- Reverse the next previous change to the text.
+
+    Cut -- Delete the selected text and place it on the X clipboard.
+
+    Copy -- Copy the selected text to the X clipboard.
+
+    Paste -- Insert text from the X clipboard at the insertion point.
+
+    Evaluate Selection -- Interpret the selected text as Perl code.
+
+    Find -- Search for specified text, and specify search options. Marks
+    text for later replacement (see below).
+
+    Find Next -- Find next match of search text.
+
+    Previous -- Find previous match of search text.
+
+    Replace -- Replace marked search text with text from the replacement
+    entry.
+
+    Goto Line -- Go to the line entered by the user.
+
+    Which Line -- Report the line and column position of the insertion
+    point.
+
+  Options Menu
+
+    Wrap -- Select how the text should wrap at the right margin.
+
+    Scroll Bars -- Select from scroll bars at right or left, top or bottom
+    of the text area.
+
+    Show/Hide Menubar -- Toggle whether the menubar is visible. A popup
+    version of the menus is always available by pressing the right mouse
+    button (Button 3) over the text area.
+
+    Foreground Color -- Select foreground and insertion cursor color from
+    list of system colors.
+
+    Background Color -- Select text window background color from list of
+    system colors.
+
+    Text Font -- Select text font from list of system fonts.
+
+  Help Menu
+
+    About -- Report name of workspace and modification time, and version of
+    Workspace.pm library.
+
+    Help -- Display the Workspace.pm POD documentation in a text window
+    formatted by pod2text.
+
+KEY BINDINGS
+    For further information, please refer to the Tk::Text and Tk::bind man
+    pages.
+
+        Alt-Q                 Quit, Optionally Saving Text
+        Alt-S                 Save Workspace to Disk
+        Alt-U                 Undo
+        Alt-X                 Copy Selection to Clipboard and Delete
+        Alt-C                 Copy Selection to Clipboard
+        Alt-V                 Insert Clipboard Contents at Cursor
+    
+        Right, Ctrl-F         Forward Character
+        Left, Ctrl-B          Backward Character
+        Up, Ctrl-P            Up One Line
+        Down, Ctrl-N          Down One Line
+        Shift-Right           Forward Character Extend Selection
+        Shift-Left            Backward Character Extend Selection
+        Shift-Up              Up One Line, Extend Selection
+        Shift-Down            Down One Line, Extend Selection
+        Ctrl-Right, Meta-F    Forward Word
+        Ctrl-Left, Meta-B     Backward Word
+        Ctrl-Up               Up One Paragraph
+        Ctrl-Down             Down One Paragraph
+        PgUp                  Scroll View Up One Screen
+        PgDn                  Scroll View Down One Screen
+        Ctrl-PgUp             Scroll View Right
+        Ctrl-PgDn             Scroll View Left
+        Home, Ctrl-A          Beginning of Line
+        End, Ctrl-E           End of Line
+        Ctrl-Home, Meta-<     Beginning of Text
+        Ctrl-End, Meta->      End of Text
+        Ctrl-/                Select All
+        Ctrl-\                Clear Selection
+        F16, Copy, Meta-W     Copy Selection to Clipboard
+        F20, Cut, Ctrl-W      Copy Selection to Clipboard and Delete
+        F18, Paste, Ctrl-Y    Paste Clipboard Text at Insertion Point
+        Delete, Ctrl-D        Delete Character to Right, or Selection
+        Backspace, Ctrl-H     Delete Character to Left, or Selection
+        Meta-D                Delete Word to Right
+        Meta-Backspace, Meta-Delete
+                              Delete Word to Left
+        Ctrl-K                Delete from Cursor to End of Line
+        Ctrl-O                Open a Blank Line
+        Ctrl-X                Clear Selection
+        Ctrl-T                Reverse Order of Characters on Either Side
+                              of the Cursor
+    
+        Mouse Button 1:
+        Single Click: Set Insertion Cursor at Mouse Pointer
+        Double Click: Select Word Under the Mouse Pointer and Position 
+        Cursor at the Beginning of the Word
+        Triple Click: Select Line Under the Mouse Pointer and Position 
+        Cursor at the Beginning of the Line
+        Drag: Define Selection from Insertion Cursor
+        Shift-Drag: Extend Selection
+        Double Click, Shift-Drag: Extend Selection by Whole Words
+        Triple Click, Shift-Drag: Extend Selection by Whole Lines
+        Ctrl: Position Insertion Cursor without Affecting Selection
+
+        Mouse Button 2:
+        Click: Copy Selection into Text at the Mouse Pointer
+        Drag:Shift View
+
+        Mouse Button 3: 
+        Pop Up Menu Bar
+
+        Meta                  Escape
+
+METHODS
+    There is no actual API specification, but Workspaces recognize the
+    following instance methods:
+
+    about, create, new, bind, window, text, name, textfont, foreground,
+    background, filemenu, editmenu, wrap, parent_ws, width, height, x, y,
+    open, ws_font, ws_setcolor, ws_quit, write_to_disk, menubar, ws_close,
+    ws_copy, ws_cut, ws_paste, ws_undo, self_help, ws_import, ws_export.
+
+    The following class methods are available:
+
+    WrapMenuItems, ScrollMenuItems.
+
+    The only method that recognizes configuration options is the
+    constructor, 'new'. At the moment it the only option it recognizes is
+    'menubar', which sets a visible (true) or hidden (false) menubar.
+
+AUTHOR
+    rkiesling@mainmatter.com (Robert Kiesling)
+
+REVISION
+    $Id: Workspace.pm,v 1.41 2000/09/25 15:16:52 kiesling Exp $
+
+SEE ALSO:
+    Tk::overview(1) manual page, perl(1) manual page.
+
