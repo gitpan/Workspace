@@ -1,25 +1,53 @@
 NAME
-    Workspace.pm -- Library to create and use a persistent, embedded Perl
-    workspace (file browser, shell, editor) script using Perl/Tk.
+      Workspace.pm -- Persistent, multi-purpose text processor.
+      (File browser, shell, editor) script. Requires Perl/Tk.
 
 SYNOPSIS
        # Create a workspace from the shell prompt:
 
          #mkws "workspace"
 
-       # Open an existing workspace:
+       # Open an existing workspace from the shell prompt:
 
-         #./workspace &
+         #./workspace <options> &
 
-       # In a Perl script:
+       # Open from a Perl script:
 
+          use Tk;
           use Tk::Workspace;
 
           Tk::Workspace::open(Tk::Workspace::create("workspace"));
 
+       # Create workspace object:
+
+          $w = Tk::Workspace -> new( textfont => "*-courier-medium-r-*-*-12-*",
+                                     foreground => 'white',
+                                     background => 'black',
+                                     scroll => 'se',
+                                     height => 351,
+                                     width => 565,
+                                     x => 100,
+                                     y => 100,
+                                     insertionpoint => '1.0',
+                                     menubarvisible => 'True',
+                                     text => 'Text to be inserted' );
+
 DESCRIPTION
     Workspace uses the Tk::TextUndo widget to create an embedded Perl text
     editor. The resulting file can be run as a standalone program.
+
+COMMAND LINE OPTIONS
+    A Workspace recognizes the same command line options as its parent
+    Tk::MainWindow. Refer to the Tk::CmdLine manual page for a list of the
+    options and their function.
+
+    The command line options and the workspace parameters generally
+    complement each other. The command line color and font options act on
+    the widget colors; e.g., menus and dialogs, while the embedded values
+    specify colors and fonts for editable text. The most notable exception
+    to a standard command-line option is -geometry, where a Workspace will
+    use its persistent geometry (that is, the default geometry when last
+    saved), instead of a command line geometry specification.
 
 MENU FUNCTIONS
     A workspace contains a menu bar with File, Edit, Options, and Help
@@ -49,8 +77,13 @@ MENU FUNCTIONS
     the environment where the workspace was started. At present the
     workspace shell recognizes only a subset of the bash prompt variables,
     and does not implement command history or setting of environment
-    variables in the subshell. Refer to the bash(1) manual page for further
-    information.
+    variables in the subshell.
+
+    Due to I/O blocking, results can be unpredictable, especially if the
+    called program causes an eof condition on STDERR. For details refer to
+    the Tk::Shell POD documentation.
+
+    Refer to the bash(1) manual page for further information.
 
     Typing 'exit' leaves the shell and returns the workspace to normal text
     editing mode.
@@ -97,11 +130,10 @@ MENU FUNCTIONS
     version of the menus is always available by pressing the right mouse
     button (Button 3) over the text area.
 
-    Foreground Color -- Select foreground and insertion cursor color from
-    list of system colors.
-
-    Background Color -- Select text window background color from list of
-    system colors.
+    Color Editor -- Pops up a Color Editor window. You can select the text
+    attribute that you want to change from the Colors -> Color Attributes
+    menu. Pressing the Apply... button at the bottom of the Color Editor
+    applies the color selection to the text.
 
     Text Font -- Select text font from list of system fonts.
 
@@ -185,25 +217,37 @@ METHODS
     There is no actual API specification, but Workspaces recognize the
     following instance methods:
 
-    about, create, new, bind, window, text, name, textfont, foreground,
-    background, filemenu, editmenu, wrap, parent_ws, width, height, x, y,
-    open, ws_font, ws_setcolor, ws_quit, write_to_disk, menubar, ws_close,
-    ws_copy, ws_cut, ws_paste, ws_undo, self_help, ws_import, ws_export.
+    about, bind, close_dialog, create, editmenu, elementColor,
+    evalselection, filemenu, filenotfound, fontdialogaccept,
+    fontdialogapply, fontdialogclose, geometry, goto_line, height, helpmenu,
+    insert_output, insertionpoint, ishell, menubar, menubarvisible, menus,
+    my_directory, name, new, open, optionsmenu, parent_ws, popupmenu,
+    postpopupmenu, process_args, prompt, scroll, scrollbar, self_help,
+    set_scroll, shell_client, shell_cmd, text, textfont, togglemenubar,
+    what_line, width, window, wrap, write_to_disk, ws_copy, ws_cut,
+    ws_export, ws_font, ws_import, ws_paste, ws_undo, x, y
 
     The following class methods are available:
 
     WrapMenuItems, ScrollMenuItems.
 
-    The only method that recognizes configuration options is the
-    constructor, 'new'. At the moment it the only option it recognizes is
-    'menubar', which sets a visible (true) or hidden (false) menubar.
+    The 'new' constructor recognizes the settings of the following options,
+    which are used by the Workspace.pm :
 
-AUTHOR
-    rkiesling@mainmatter.com (Robert Kiesling)
+    window, name, textfont, width, height, x, y, foreground, background,
+    textfont, filemenu, editmenu, optionsmenu, wrapmenu, scrollmenu,
+    modemenu, helpmenu, menubar, popupmenu, menubarvisible, scroll,
+    scrollbuttons, insertionpoint, text
+
+CREDITS
+    Tk::Workspace by rkiesling@mainmatter.com (Robert Kiesling)
+
+    Perl/Tk by Nick Ing-Simmons. Tk::ColorEditor widget by Steven Lidie.
+    Perl by Larry Wall and many others.
 
 REVISION
-    $Id: Workspace.pm,v 1.41 2000/09/25 15:16:52 kiesling Exp $
+    $Id: Workspace.pm,v 1.48 2000/10/24 22:20:27 kiesling Exp kiesling $
 
 SEE ALSO:
-    Tk::overview(1) manual page, perl(1) manual page.
+    Tk::overview(1), Tk::ColorEditor, perl(1) manual pages.
 

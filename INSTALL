@@ -1,11 +1,11 @@
-Tk::Workspace.pm, Version 1.,41, installation:
+Tk::Workspace.pm, Version 1.48, installation:
 
-Please remember that this software has not been tested thoroughly,
-only on the Linux and Solaris operating systems.  Refer all questions
-and problem reports to the author, rkiesling@mainmatter.com.
+The Tk::Workspace.pm distribution has been tested only on the Linux
+and Solaris operating systems.  Refer all questions and problem
+reports to the author, rkiesling@mainmatter.com.
 
 
-System requirements:
+System Requirements:
 
 1.  A Unix or derivative operating system.
 2.  Perl version 5.005 or greater.
@@ -15,32 +15,36 @@ System requirements:
 
 Installation:
 
-1.  Unpack the workspace-0.80 archive with the "unzip" command:
+1.  Untar the workspace-1.48 archive with the guzip and tar commands:
 
-  unzip workspace-1.41.zip
+  # gzip -dc workspace-1.48.tar.gz | tar xvf -
+ 
+   or, using GNU tar,
+
+  # tar zxvf workspace-1.48.tar.gz
 
 2.  Change to the top-level subdirectory:
 
-  $ cd workspace-1.41
+  # cd workspace-1.48
 
 3.  The top-level Makefile should work on any Unix or derivative
-    system.  It uses the host system's Perl installation to 
-    build the package Makefiles.  At the prompt, type:
+    system.  It uses the Perl ExtUtils installation to 
+    build the package's Makefile.  At the prompt, type:
 
-  $ make makefiles
+  # perl Makefile.PL
 
 4.  Build the program modules and documentation.  Type:
 
-  $ make
+  # make
 
 5.  If necessary, become root (via "su", for example), and 
     install the source files and documentation in the system's 
     site_perl library, and the "mkws" script in 
     /usr/local/bin, using the "make install" command:
 
-  $ su
+  # su
   Enter Password:
-  # make install
+  $ make install
 
 
 Copyright:

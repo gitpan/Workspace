@@ -1,5 +1,5 @@
 package Tk::Workspace;
-my $RCSRevKey = '$Revision: 1.41 $';
+my $RCSRevKey = '$Revision: 1.48 $';
 $RCSRevKey =~ /Revision: (.*?) /;
 $VERSION=$1;
 
@@ -15,24 +15,31 @@ use Tk::DialogBox;
 use Tk::Dialog;
 use Tk::FileSelect;
 use Tk::CmdLine;
+use Tk::ColorEditor;
+
+use Tk::Shell qw( VERSION ishell shell_client shell_cmd );
 
 use FileHandle;
 use IO::File;
 use IPC::Open3;
+use IPC::Open2;
+use IO::Select;
 
 @ISA=qw(Tk::TextUndo Exporter);
-use base qw(Tk::Widget);
-Construct Tk::Widget 'Workspace';
+use base qw(Tk::Widget Tk::Text Tk::TextUndo);
+Construct Tk::Widget 'Tk::Workspace';
 
-my ($tk_major_ver, $tk_minor_ver) = split /\./, $Tk::VERSION;
-
-if( ( $tk_major_ver < '800' ) || ( $tk_minor_ver < '022' ) ) {
-     die "Fatal Error: \nThis version of Workspace.pm Requires Perl/Tk 800.022.";
+$SIG{WINCH} = \&do_win_signal_event;
+sub do_win_signal_event {
+  Tk::Event::DoOneEvent(255);
+  $SIG{WINCH} = \&do_win_signal_event;
 }
 
-my @months = ( 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul',
-    'Aug', 'Sep', 'Oct', 'Nov', 'Dec' );
-my @weekdays = ( 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat' );
+my ($ptk_major_ver, $ptk_minor_ver) = split /\./, $Tk::VERSION;
+
+if( ( $ptk_major_ver lt '800' ) || ( $ptk_minor_ver lt '022' ) ) {
+     die "Fatal Error: \nThis version of Workspace.pm Requires Perl/Tk 800.022.";
+}
 
 my @Workspaceobject = 
     ('#!/usr/bin/perl',
@@ -43,6 +50,8 @@ my @Workspaceobject =
      'my $bg=\'white\';',
      'my $name=\'\';',
      'my $menuvisible=\'1\';',
+     'my $scrollbars=\'\';',
+     'my $insert=\'1.0\';',
      'my $font=\'*-courier-medium-r-*-*-12-*"\';',
      'use Tk::Workspace;', 
      '@ISA = qw(Tk::Workspace);',
@@ -50,11 +59,13 @@ my @Workspaceobject =
      'use Tk;',
      'use FileHandle;',
      'use Env qw(HOME);',
-     'my $workspace = Tk::Workspace -> new ( menubar => $menuvisible );',
+     'my $workspace = Tk::Workspace -> new ( menubar => $menuvisible, ',
+                                        'scroll => $scrollbars );',
      '$workspace -> name($name);',
      '$workspace -> textfont($font);',
      '$workspace -> text -> insert ( \'end\', $text );',
      '$workspace -> text -> configure( -foreground => $fg, -background => $bg, -font => $font, -insertbackground => $fg );',
+     '$workspace -> text -> markSet( \'insert\', $insert );',
      '$workspace -> text -> pack( -fill => \'both\', -expand => \'1\');',
      'bless($workspace,ref(\'Tk::Workspace\'));',
      '$workspace -> bind;',
@@ -66,39 +77,8 @@ my $defaultbackgroundcolor="white";
 my $defaultforegroundcolor="black";
 my $defaulttextfont="*-courier-medium-r-*-*-12-*";
 my $menufont="*-helvetica-medium-r-*-*-12-*";
-my $Perlhomedirectory='.perlobjects';
-my $Default=$HOME . '/' . $Perlhomedirectory . '/' . '.default';
-my $SystemCopyCommand='cp';       # OS-specific file copy command.
 
 my $clipboard;          # Internal clipboard.
-
-# from X11 rgb.txt file
-my @x11colors= ( 'snow', 'ghost white', 'white smoke', 'gainsboro',
-'floral white', 'old lace', 'linen', 'antique white', 'papaya whip',
-'blanched almond', 'bisque', 'peach puff', 'navajo white', 'moccasin',
-'cornsilk', 'ivory', 'lemon chiffon', 'seashell', 'honeydew', 'mint cream',
-'azure', 'alice blue', 'lavender', 'lavender blush', 'misty rose', 'white',
-'black', 'dark slate gray', 'dim gray', 'slate gray', 'light slate gray',
-'gray', 'light gray', 'midnight blue', 'navy', 'cornflower blue',
-'dark slate blue', 'slate blue', 'medium slate blue', 'light slate blue',
-'medium blue', 'royal blue', 'blue', 'dodger blue', 'deep sky blue',
-'sky blue', 'light sky blue', 'steel blue', 'light steel blue', 'light blue',
-'powder blue', 'pale turquoise', 'dark turquoise', 'medium turquoise',
-'turquoise', 'cyan', 'light cyan', 'cadet blue', 'medium aquamarine',
-'aquamarine', 'dark green', 'dark olive green', 'dark sea green',
-'sea green', 'medium sea green', 'light sea green', 'pale green',
-'spring green', 'lawn green', 'green', 'chartreuse', 'medium spring green',
-'green yellow', 'lime green', 'yellow green', 'forest green', 'olive drab',
-'dark khaki', 'khaki', 'pale goldenrod', 'light goldenrod yellow',
-'light yellow', 'yellow', 'gold', 'light goldenrod', 'goldenrod',
-'dark goldenrod', 'rosy brown', 'indian red', 'saddle brown', 'sienna',
-'peru', 'burlywood', 'beige', 'wheat', 'sandy brown', 'tan', 'chocolate',
-'firebrick', 'brown', 'dark salmon', 'salmon', 'light salmon', 'orange',
-'dark orange', 'coral', 'light coral', 'tomato', 'orange red', 'red',
-'hot pink', 'deep pink', 'pink', 'light pink', 'pale violet red', 'maroon',
-'medium violet red', 'violet red', 'magenta', 'violet', 'plum', 'orchid',
-'medium orchid', 'dark orchid', 'dark violet', 'blue violet', 'purple',
-'medium purple', 'thistle' );
 
 sub new {
     my $proto = shift;
@@ -129,9 +109,13 @@ sub new {
 	menubar => undef,
 	popupmenu => undef,
 	menubarvisible => undef,
-	text => [],
+	scroll => undef,
+	scrollbuttons => undef,
+	insertionpoint => undef,
+        text => [],
 	};
     bless($self, $class);
+    &process_args( $self, %args);
     $self -> {menubarvisible} = $menustatus;
     $self -> {window} -> {parent} = $self;
     $self -> {text} = ($self -> {window}) -> 
@@ -139,14 +123,24 @@ sub new {
 		       -background => $defaultbackgroundcolor,
 		       -exportselection => 'true');
     ($self -> text) -> markGravity( 'insert', 'right' );
-#   Prevents errors when trying to paste from an empty clipboard.
+    ($self -> text) -> Subwidget('yscrollbar') -> configure(-width=>10);
+    ($self -> text) -> Subwidget('xscrollbar') -> configure(-width=>10);
+
+
+    # Prevents errors when trying to paste from an empty clipboard.
     ($self -> text) -> clipboardAppend( '' );
     &menus( $self );
     &set_scroll($self);
+
+    $self -> text -> focus;
+    $self -> text -> see( 'insert' );
     return $self;
 }
 
-
+sub process_args {
+  my ($self, %args) = @_;
+  foreach(keys %args){ $self->{$_}=$args{$_} }
+}
 
 ### 
 ### Class methods
@@ -192,14 +186,14 @@ sub WrapMenuItems
 sub ScrollMenuItems {
     my ($self) = @_;
     return [
-	 [checkbutton => 'Left', -command => 
-	  sub{$self -> scrollbar('w')}, -variable => \$lscroll],
-	 [checkbutton => 'Right', -command => 
-	  sub{$self -> scrollbar('e')}, -variable => \$rscroll],
-	 [checkbutton => 'Top', -command => 
-	  sub{$self -> scrollbar('n')}, -variable => \$tscroll],
-	 [checkbutton => 'Bottom', -command => 
-	  sub{$self -> scrollbar('s')}, -variable => \$bscroll],
+	 [checkbutton => 'Left', -command => sub{$self -> scrollbar('w')},
+	  -variable => \$lscroll ],
+	 [checkbutton => 'Right', -command => sub{$self -> scrollbar('e')},
+	  -variable => \$rscroll ],
+	 [checkbutton => 'Top', -command => sub{$self -> scrollbar('n')},
+	  -variable => \$tscroll ],
+	 [checkbutton => 'Bottom', -command => sub{$self -> scrollbar('s')},
+	  -variable => \$bscroll],
 	    ];
 }
 
@@ -281,10 +275,10 @@ sub menus {
     $self -> {filemenu} -> add ('separator');
     $self -> {filemenu} -> add ( 'command', -label => 'System Command...',
 				 -state => 'normal',
-				 -command => sub{$self -> shell_cmd});
+				 -command => sub{shell_cmd($self)});
     $self -> {filemenu} -> add ( 'command', -label => 'Shell',
 				 -state => 'normal',
-				 -command => sub{$self -> ishell});
+				 -command => sub{ishell($self)});
     $self -> {filemenu} -> add ('separator');
     $self -> {filemenu} -> add ( 'command', -label => 'Save...',
 				 -state => 'normal',
@@ -344,8 +338,8 @@ sub menus {
     $self -> {optionsmenu} -> add ( 'cascade',
 				    -label => 'Scroll Bars',
 				    -menu => $self -> {scrollmenu} );
-    $items = &ScrollMenuItems($self);
-    $self -> {scrollmenu} -> AddItems( @$items );
+    $self -> {scrollbuttons} = &ScrollMenuItems( $self );
+    $self -> {scrollmenu} -> AddItems( @{$self -> {scrollbuttons}} );
     $self 
 	-> {optionsmenu} -> 
 	    add ( 'command',
@@ -353,15 +347,10 @@ sub menus {
 		  -command => [\&togglemenubar, $self ] );
     $self -> {optionsmenu} -> add ('separator');
     $self -> {optionsmenu} -> add ( 'command', -label => 
-				    'Foreground Color...',
+				    'Color Editor...',
 				 -state => 'normal',
 				 -font => $menufont,
-	 -command => [\&ws_setcolor, $self, 'foreground']);
-    $self -> {optionsmenu} -> add ( 'command', -label => 
-				    'Background Color...',
-				 -state => 'normal',
-				 -font => $menufont,
-	 -command => [\&ws_setcolor, $self, 'background']);
+	 -command => [\&elementColor, $self]);
     $self -> {optionsmenu} -> add ('separator');
     $self -> {optionsmenu} -> add ( 'command', -label => 'Text Font...',
 				 -state => 'normal',
@@ -376,7 +365,7 @@ sub menus {
 				 -state => 'normal',
 				 -font => $menufont,
 				 -accelerator => "F1",
-				 -command => sub{self_help(__FILE__)});
+				 -command => sub{$self -> self_help});
 }
 
 sub window {
@@ -506,6 +495,20 @@ sub y {
     return $self -> {y}
 }
 
+sub scroll {
+    my $self = shift;
+    if (@_) { $self -> {scroll} = shift }
+    return $self -> {scroll}
+}
+
+sub insertionpoint {
+    my $self = shift;
+    if (@_) { $self -> {insertionpoint} = shift }
+    return $self -> {insertionpoint}
+}
+
+
+
 sub open {
     my ($name) = @_;
 
@@ -591,7 +594,7 @@ sub goto_line
 
 
 sub scrollbar {
-    my $self = shift;
+  my $self = shift;
     if (@_) { 
 	my ($p) = @_;
 	if (($p=~m/w/)&&($lscroll=='1')){
@@ -622,6 +625,10 @@ sub set_scroll {
     my ($self) = @_;
     $self -> {text} -> configure( -scrollbars => $self -> {scroll} );
     $self -> {text} -> pack( -expand => '1', -fill => 'both' );
+    if( $self -> {scroll} =~ /w/ ) { $lscroll = '1' }
+    if( $self -> {scroll} =~ /e/ ) { $rscroll = '1' }
+    if( $self -> {scroll} =~ /n/ ) { $tscroll = '1' }
+    if( $self -> {scroll} =~ /s/ ) { $bscroll = '1' }
 }
 
 sub ws_font {
@@ -698,80 +705,16 @@ sub fontdialogclose {
     $d -> DESTROY;
 }
 
-sub ws_setcolor {
-    my ($self, $element) = @_;
-    my $list;
-    my $dialog;
-    my $listframe;
-    my $buttonframe;
-    my $acceptbutton;
-    my $applybutton;
-    my $cancelbutton;
-    my $c;
-    my $title;
-
-    if ( $element =~ m/foreground/ ) {
-	$title = 'Set Foreground Color';
-    } elsif ($element =~ m/background/) {
-	$title = 'Set Background Color';
-    }
-	$dialog = ($self -> window) -> 
-	    Toplevel( -title => $title );
-    $listframe = $dialog -> Frame( -container => 'no');
-    $buttonframe = $dialog -> Frame( -container => 'no');
-    $listframe -> pack;
-    $buttonframe -> pack;
-
-    $list = $listframe -> 
-	Scrolled( 'Listbox', -height => 20, -width => 25,
-		 -selectmode => 'single',
-		 -scrollbars => 'e');
-    foreach $c ( @x11colors ) {	$list -> insert( 'end', $c ); }
-    $list -> pack( -anchor => 'w' );
-
-    $acceptbutton = $buttonframe 
-	-> Button( -text => 'Accept',
-		   -command => [\&colordialogaccept, $dialog, $list, $self,
-				$element]) 
-	    -> pack( -side => 'left' );
-    $applybutton = $buttonframe 
-	-> Button( -text => 'Apply',
-		   -command => [\&colordialogapply, $dialog, $list, $self,
-				$element]) 
-	    -> pack( -side => 'left' );
-    $cancelbutton = $buttonframe 
-	-> Button( -text => 'Cancel',
-		   -command => [\&colordialogclose, $dialog]) 
-	    -> pack( -side => 'left');
-}
-
-sub colordialogaccept {
-    my ($d, $list, $self, $element) = @_;
-    &colordialogapply( $d, $list, $self, $element );
-    &colordialogclose( $d );
-}
-
-sub colordialogapply {
-    my ($d, $list, $self, $element) = @_;
-    my $c;
-    $c = $list -> get( $list -> curselection );
-    if ( $element =~ m/foreground/ ) {
-	($self -> text) -> configure( -foreground => $c,
-				      -insertbackground => $c );
-    } elsif ( $element =~ m/background/ ) {
-	($self -> text) -> configure( -background => $c );
-    }
-}
-
-sub colordialogclose {
-    my ($d) = @_;
-    $d -> DESTROY;
+sub elementColor {
+  my ($self) = @_;
+  my $c = 
+    $self -> window -> ColorEditor( -widgets => [$self -> text]);
+  $c -> Show;
 }
 
 sub write_to_disk {
     my $self = shift;
     my $quit = shift;   # Close workspace if true
-    my $dir = $HOME . '/' . $Perlhomedirectory;
     my $workspacename = $self -> name;
     my $height = $self -> height;
     my $width = $self -> width;
@@ -788,6 +731,8 @@ sub write_to_disk {
     my $resp;
     my $wrap;
     my $mb;
+    my $sb;
+    my $ip;
 
     if( $quit ) { 
 	if ( ( $resp = &close_dialog($self) ) =~ m/Cancel/) { 
@@ -807,9 +752,11 @@ sub write_to_disk {
 
     $wrap = $self -> wrap;
     $mb = $self -> menubarvisible;
+    $sb = $self -> {scroll};
 
     $fg = ($self -> text) -> cget('-foreground');
     $bg = ($self -> text) -> cget('-background');
+    $ip = ($self -> text) -> index( 'insert' );
     $f = $self -> textfont;
 
     # concatenate text.
@@ -829,6 +776,8 @@ sub write_to_disk {
     grep { s/bg\=\'.*\'/bg=\'$bg\'/ } @tmpobject;
     grep { s/font\=\'.*\'/font=\'$f\'/ } @tmpobject;
     grep { s/menuvisible\=\'.*\'/menuvisible=\'$mb\'/ } @tmpobject;
+    grep { s/scrollbars\=\'.*\'/scrollbars=\'$sb\'/ } @tmpobject;
+    grep { s/insert\=\'.*\'/insert=\'$ip\'/ } @tmpobject;
     grep { s/#!\/usr\/bin\/perl// } @tmpobject;
 	   grep { s/my \$text=\'\'\;// } @tmpobject;
 	   foreach $line ( @tmpobject ) { printf FILE $line . "\n"; };
@@ -837,7 +786,8 @@ sub write_to_disk {
 	   system( @remove_old );
 	   chmod 0755, $workspacepath;
 
-EXIT:	   if ( $quit ) { exit 0; }
+EXIT:	   if ( $quit ) { $self -> window -> WmDeleteWindow; }
+	
 }
 
 # Create a new Workspace executable if one doesn't exist.
@@ -1036,18 +986,16 @@ sub ws_export {
     my $filedialog;
     my $filename;
     my $filename;
-    my $fh = new IO::File;
 
 
-START:    $filedialog = ($self -> {window})
-	-> FileSelect ( -directory => '.' );
+    $filedialog = ($self -> {window})->FileSelect ( -directory => '.' );
     $filename = $filedialog -> Show;
 
-    $fh -> open( "+> $filename" ) or &filenotfound( $self );
+    open OFN, "+> $filename" or &filenotfound( $self );
 
-    print $fh ($self -> {text}) -> get( '1.0', 'end' );
+    print OFN ($self -> {text}) -> get( '1.0', 'end' );
 
-    close $fh;
+    close OFN;
 }
 
 sub close_dialog {
@@ -1078,139 +1026,6 @@ sub filenotfound {
     $nofiledialog -> Show;
 }
 
-sub ishell {
-    my $self = shift;
-    my $p = &prompt( $ENV{'PS1'} );
-
-    ($self -> window) -> bind( '<KeyPress-Return>', 
-			       sub{shell_client( $self )});
-    &insert_output( $self, "\n" );
-    &insert_output( $self, $p ); 
-}
-
-# external programs that the shell executes
-sub shell_client {
-    my $self = shift;
-    my $cmdline; my $cmd;
-    my $p = &prompt( $ENV{'PS1'} );
-    my $o; my $output = '';
-
-    # Need to open and then close each I/O channel
-    # immediately to avoid potential deadlocks.
-
-    $shpid = open3( *IN, *OUT, *ERR, "bash" );
-
-    my $startofprompt = 
-	($self -> text) -> 
-	    search( -backwards, -exact, $p, 
-		    $self -> text -> index( 'insert' ) );
-    $cmdline = ($self -> text) -> get( $startofprompt, 'insert' );
-
-    $cmd = substr $cmdline, length $p ;
-    chop $cmd;
-    print IN $cmd;
-    close ( IN );
-
-    foreach $o (<OUT>) { $output .= $o };
-    close( OUT );
-    foreach $o (<ERR>) { $output .= $o };
-    close( ERR );
-
-    &insert_output( $self, $output );
-
-    if( $cmd =~ /exit/ ) {
-	($self -> window) -> bind( '<KeyPress-Return>', '' );
-	return;
-    } elsif ( ( $cmd =~ /cd/ ) || ( $cmd =~ /chdir/ ) ) {
-	$cmd =~ s/(cd )|(chdir )//;
-	chdir $cmd;
-    }
-    $p = &prompt( $ENV{'PS1'} );
-    &insert_output( $self, $p ); 
-}
-
-# subset of bash prompt syntax only for now.  
-sub prompt {
-    my ($s) = @_;
-    my ( $sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst ) = 
-	localtime;
-    my $calyear = $year + 1900;
-    my $mname = $months[$mon];
-    my $day = $weekdays[$wday];
-
-    if( $s =~ m/\\/ ) {
-	if ( $s =~ m/\\[hH]/ ) {
-	    my $hme = `hostname`;
-	    chop $hme;
-	    $s =~ s/\\h/$hme/;
-	}
-# eat a possible ANSI sequence.
-	if ( $s =~ m/\\e/ ) { 
-	    $s =~ s/\\e]*[^;]*\;*//;
-        }
-        if ( $s =~ m/\\t/ ) {
-	    $s =~ s/\\t/$hour:$min:$sec/;
-	}
-        if ( $s =~ m/\\T/ ) {
-	    my $thour = (($hour == 12)?12:($hour - 12));
-	    $s =~ s/\\T/$thour:$min:$sec/;
-	}
-        if ( $s =~ m/\\@/ ) {
-	    my $thour = (($hour == 12)?12:($hour - 12));
-	    my $merid = ((($hour<12||$hour==24))?'am':'pm');
-		$s =~ s/\\@/$thour:$min$merid/;
-	}
-        if ( $s =~ m/\[wW]/ ) {
-        }
-             my $dir = `pwd`;
-             chop $dir;
-             $s =~ s/\\W/$dir/;
-        }
-        if ( $s =~ m/\\d/ ) {
-             $s =~ s/\\d/$day $mname $mday/;
-        }
-# eat an octal sequence,
-$s =~ s/\\[0-9][0-9][0-9]//; 
-# gobble newlines,
-$s =~ s/\n//s;
-# and other prompt variables not yet implemented
-$s =~ s/\\(u|v|V|a|!|\$|\\|\[)//g;
-# doesn't work with an empty prompt, so...
-if ( ! $s ) { $s = "# "; }
-return $s;
-}
-
-# internal shell commands and 
-sub shell_internal {
-    my $self = shift;
-}
-
-sub shell_cmd {
-    my $self = shift;
-    local $cmd; local $output;
-    local $cmdentry;
-
-    $cmddialog = ($self -> window) -> Dialog( -title => 'Shell Command',
-					      -buttons => ["Cancel"]);
-    $cmdentry = $cmddialog -> add( 'Entry', -width => 30 ) -> pack;
-    $cmddialog -> Show;
-    $cmd = $cmdentry -> get;
-    $output = `$cmd`;
-    &insert_output( $self, $output );
-    $cmddialog -> destroy;
-}
-
-
-sub insert_output {
-    my $self = shift; 
-    my $output = shift;
-
-    ($self -> text) -> insert( $self -> text -> index( "insert" ), $output );
-    ($self -> text) -> see( $self -> text -> index( "insert" ) );
-    $self -> window -> update; 
-    $self -> text -> update;
-}
-
 sub my_directory {
     open PATHNAME, "pwd |";
     read PATHNAME, $directory, 512;
@@ -1218,13 +1033,13 @@ sub my_directory {
 }
 
 sub self_help {
-    my ($appfilename) = @_;
+    my $libfilename = &libname;
     my $help_text;
     my $helpwindow;
     my $textwidget;
 
-    open( HELP, ("pod2text < $appfilename |") ) or $help_text = 
-"Unable to process help text for $appfilename."; 
+    open  HELP, 'pod2text < '.$libfilename.' |'  or $help_text = 
+"Unable to process help text for $libfilename."; 
     while (<HELP>) {
 	$help_text .= $_;
     }
@@ -1248,15 +1063,27 @@ sub self_help {
 				pack;
 }
 
+# return the pathname to the Workspace.pm module.
+sub libname {
+  my $i;
+  my $val;
+  foreach $i ( keys( %:: ) ) {
+    $val = $::{$i};
+    if ( $val =~ /Workspace\.pm/ ) {
+      $val =~ s/\*main::\_\<//;
+      return $val;
+    }
+  }
+}
+
 
 1;
 __END__
 
 =head1 NAME
 
-Workspace.pm -- Library to create and use a persistent, embedded Perl
-            workspace (file browser, shell, editor) script using
-            Perl/Tk.
+  Workspace.pm -- Persistent, multi-purpose text processor.
+  (File browser, shell, editor) script. Requires Perl/Tk.
 
 =head1 SYNOPSIS
 
@@ -1264,21 +1091,51 @@ Workspace.pm -- Library to create and use a persistent, embedded Perl
 
      #mkws "workspace"
 
-   # Open an existing workspace:
+   # Open an existing workspace from the shell prompt:
 
-     #./workspace &
+     #./workspace <options> &
 
-   # In a Perl script:
+   # Open from a Perl script:
 
+      use Tk;
       use Tk::Workspace;
 
       Tk::Workspace::open(Tk::Workspace::create("workspace"));
+
+   # Create workspace object:
+
+      $w = Tk::Workspace -> new( textfont => "*-courier-medium-r-*-*-12-*",
+                                 foreground => 'white',
+                                 background => 'black',
+                                 scroll => 'se',
+                                 height => 351,
+                                 width => 565,
+                                 x => 100,
+                                 y => 100,
+                                 insertionpoint => '1.0',
+                                 menubarvisible => 'True',
+                                 text => 'Text to be inserted' );
 
 =head1 DESCRIPTION
 
 Workspace uses the Tk::TextUndo widget to create an embedded Perl
 text editor.  The resulting file can be run as a standalone
 program.  
+
+=head1 COMMAND LINE OPTIONS
+
+A Workspace recognizes the same command line options as its 
+parent Tk::MainWindow.  Refer to the Tk::CmdLine manual 
+page for a list of the options and their function.
+
+The command line options and the workspace parameters generally
+complement each other.  The command line color and font options act on
+the widget colors; e.g., menus and dialogs, while the embedded values
+specify colors and fonts for editable text.  The most notable
+exception to a standard command-line option is -geometry, where a
+Workspace will use its persistent geometry (that is, the default
+geometry when last saved), instead of a command line geometry
+specification.
 
 =head1 MENU FUNCTIONS
 
@@ -1309,8 +1166,13 @@ Shell -- Starts an interactive shell.  The prompt is the PS1 prompt of
 the environment where the workspace was started.  At present the
 workspace shell recognizes only a subset of the bash prompt variables,
 and does not implement command history or setting of environment
-variables in the subshell.  Refer to the bash(1) manual page for
-further information.
+variables in the subshell.  
+
+Due to I/O blocking, results can be unpredictable, especially if the
+called program causes an eof condition on STDERR.  For details refer
+to the Tk::Shell POD documentation.
+
+Refer to the bash(1) manual page for further information.
 
 Typing 'exit' leaves the shell and returns the workspace to normal
 text editing mode.
@@ -1357,11 +1219,10 @@ Show/Hide Menubar -- Toggle whether the menubar is visible.  A popup
 version of the menus is always available by pressing the right
 mouse button (Button 3) over the text area.
 
-Foreground Color -- Select foreground and insertion cursor 
-color from list of system colors.
-
-Background Color -- Select text window background color from
-list of system colors.
+Color Editor -- Pops up a Color Editor window.  You can select the
+text attribute that you want to change from the Colors -> Color
+Attributes menu.  Pressing the Apply... button at the bottom of
+the Color Editor applies the color selection to the text.  
 
 Text Font -- Select text font from list of system fonts.
 
@@ -1451,30 +1312,44 @@ and Tk::bind man pages.
 There is no actual API specification, but Workspaces recognize
 the following instance methods:
 
-about, create, new, bind, window, text, name, textfont, foreground,
-background, filemenu, editmenu, wrap, parent_ws, width, height, x, y,
-open, ws_font, ws_setcolor, ws_quit, write_to_disk, menubar, ws_close,
-ws_copy, ws_cut, ws_paste, ws_undo, self_help, ws_import, ws_export.
+about, bind, close_dialog, create, editmenu, elementColor,
+evalselection, filemenu, filenotfound, fontdialogaccept,
+fontdialogapply, fontdialogclose, geometry, goto_line, height,
+helpmenu, insert_output, insertionpoint, ishell, menubar,
+menubarvisible, menus, my_directory, name, new, open, optionsmenu,
+parent_ws, popupmenu, postpopupmenu, process_args, prompt, scroll,
+scrollbar, self_help, set_scroll, shell_client, shell_cmd, text,
+textfont, togglemenubar, what_line, width, window, wrap,
+write_to_disk, ws_copy, ws_cut, ws_export, ws_font, ws_import,
+ws_paste, ws_undo, x, y
 
 The following class methods are available:
 
 WrapMenuItems, ScrollMenuItems.
 
-The only method that recognizes configuration options is the
-constructor, 'new'.  At the moment it the only option it recognizes is
-'menubar', which sets a visible (true) or hidden (false) menubar.
+The 'new' constructor recognizes the settings of the following
+options, which are used by the Workspace.pm :
 
-=head1 AUTHOR
+window, name, textfont, width, height, x, y, foreground, 
+background, textfont, filemenu, editmenu, optionsmenu, 
+wrapmenu, scrollmenu, modemenu, helpmenu, menubar, popupmenu, 
+menubarvisible, scroll, scrollbuttons, insertionpoint, text
 
-rkiesling@mainmatter.com (Robert Kiesling)
+=head1 CREDITS
+
+Tk::Workspace by rkiesling@mainmatter.com (Robert Kiesling)
+
+Perl/Tk by Nick Ing-Simmons.
+Tk::ColorEditor widget by Steven Lidie.
+Perl by Larry Wall and many others.
 
 =head1 REVISION 
 
-$Id: Workspace.pm,v 1.41 2000/09/25 15:16:52 kiesling Exp $
+$Id: Workspace.pm,v 1.48 2000/10/24 22:20:27 kiesling Exp kiesling $
 
 =head1 SEE ALSO:
 
-Tk::overview(1) manual page, perl(1) manual page.
+Tk::overview(1), Tk::ColorEditor, perl(1) manual pages.
 
 =cut
 
